@@ -1,0 +1,9 @@
+pandas
+sqlalchemy
+pymysql
+requests
+beautifulsoup4
+lxml
+nflreadpy
+kaggle
+jupyterlab
