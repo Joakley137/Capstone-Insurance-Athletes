@@ -59,6 +59,26 @@ Each group of predictors was removed in turn and the model refit without it. The
 
 The average is higher than the median because a few injuries run very long. That long tail is exactly what makes injuries expensive to insure.
 
+### Severity tiers: the pricing table
+
+The model starts with 57 injury groups, but many of them turn out to be statistically indistinguishable. Merging those leaves **11 severity tiers**, and the model is just as accurate with 11 as with 57. Each tier is clearly different from the ones next to it.
+
+| Tier | Multiplier vs. Tier 6 | Median days out | Examples |
+|---|---|---|---|
+| 1 | 0.26 | 8 | Illness |
+| 2 | 0.53 | 11 | Bruises and knocks to the knee or foot |
+| 3 | 0.63 | 17 | Muscle strains, concussion, ankle ligament sprains, thigh knocks |
+| 4 | 0.75 | 20 | Hamstring strains, calf and groin injuries |
+| 5 | 0.87 | 21 | Unspecified injuries, muscle tears, calf and groin tears, head fractures |
+| 6 | 1.00 | 28 | Hamstring and ankle injuries (unspecified), hand and arm fractures |
+| 7 | 1.30 | 31 | Ankle tears, back, shoulder and unspecified knee injuries |
+| 8 | 1.57 | 43 | Foot and shoulder fractures, groin surgery, hip injuries |
+| 9 | 2.00 | 62 | Knee ligament injuries, other surgeries and tears |
+| 10 | 2.96 | 141 | Achilles tears, knee and ankle surgery, lower-leg fractures |
+| 11 | 3.61 | 192 | Knee tears (mostly cruciate ligament) |
+
+The full list of which injury goes in which tier is in `severity_models.ipynb`, section 7.
+
 ### What matters most: whether the career ends
 
 | Rank | Predictor | Accuracy lost without it | What it shows |
@@ -73,7 +93,7 @@ The two accuracy columns aren't directly comparable: each model is measured in i
 
 ### Recommendations
 
-- **Expected cost of an injury:** use the **gamma GLM** for days missed. Its multipliers can be used directly as a pricing table.
+- **Expected cost of an injury:** use the **gamma GLM with severity tiers** for days missed. Its multipliers can be used directly as a pricing table.
 - **The chance of a very long absence**, e.g. for policy limits: use the **lognormal** model with the same predictors. It describes the long tail more accurately.
 - **Career-ending risk:** use the **logistic regression**. More complex versions did not do better.
 - **Putting them together:**
@@ -141,7 +161,12 @@ The gamma GLM came within about 2% of gradient boosting's accuracy while staying
 
 ### How sure are we?
 
-Each multiplier comes with a **95% confidence interval**: a range that likely contains the true value. For common injuries the range is narrow; knee tears are 3.3× to 4.4×. For rarer groups it is wider. When two groups' ranges overlap heavily, the data can't really tell them apart. That makes them good candidates to merge into a single pricing tier later.
+Each multiplier comes with a **95% confidence interval**: a range that likely contains the true value. For common injuries the range is narrow; knee tears are 3.3× to 4.4×. For rarer groups it is wider. When two groups' ranges overlap heavily, the data can't really tell them apart.
+
+That is why the 57 injury groups were merged into 11 **severity tiers**:
+- **How:** groups next to each other in the ranking were combined whenever the difference between them could be due to chance (statistical significance at the 5% level).
+- **When it stopped:** merging continued until every tier was clearly different from its neighbours.
+- **No peeking:** the tiers were decided using only the training players, so the test results stay a fair check.
 
 ### Glossary
 

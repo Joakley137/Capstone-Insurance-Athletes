@@ -385,6 +385,108 @@ class GammaGLM(_Distribution):
         return stats.gamma(self.shape, scale=self.predict(df) / self.shape)
 
 
+# --------------------------------------------------------------------------
+# Severity tiers: rating classes merged until neighbours really differ
+# --------------------------------------------------------------------------
+def _tier_rhs(ref, interactions=None):
+    rest = rhs_final(interactions).split(" + ", 1)[1]            # everything after the class term
+    return f"C(severity_tier, Treatment('{ref}')) + {rest}"
+
+
+def severity_tiers(train, interactions=None, alpha=0.05, max_rounds=10):
+    """Merge rating classes whose relativities are not significantly different into severity tiers.
+
+    The classes are ordered by their gamma GLM relativity (with all the other predictors in the model).
+    Neighbouring groups are merged, least different pair first, while the difference between them has
+    p > alpha. The model is then refit with the merged groups, and that repeats until every pair of
+    neighbouring tiers differs at the alpha level. Fit on training data only: the tiers depend on the
+    outcome, so building them on the test set would flatter the test score.
+
+    Returns {rating class: "Tier k"}, Tier 1 being the shortest injuries.
+    """
+    d = completed(train).copy()
+    classes = sorted(d["injury_class"].astype(str).unique())
+    group_of = {c: f"G{i}" for i, c in enumerate(classes)}
+    for _ in range(max_rounds):
+        ref = group_of[REF_CLASS]
+        d["severity_tier"] = d["injury_class"].astype(str).map(group_of).astype("category")
+        design, res = _gamma_glm(_tier_rhs(ref, interactions), d)
+        cov = res.cov_params()
+        col = lambda g: f"C(severity_tier, Treatment('{ref}'))[T.{g}]"
+        groups = sorted(set(group_of.values()), key=lambda g: 0.0 if g == ref else res.params[col(g)])
+
+        # Each block: estimate b (log relativity vs. the reference group), variance v, member groups
+        blocks = [{"b": 0.0 if g == ref else res.params[col(g)], "v": 0.0 if g == ref else cov.loc[col(g), col(g)],
+                   "groups": [g]} for g in groups]
+
+        def p_value(a, b):
+            c = 0.0
+            if len(a["groups"]) == len(b["groups"]) == 1 and ref not in (a["groups"][0], b["groups"][0]):
+                c = cov.loc[col(a["groups"][0]), col(b["groups"][0])]
+            se = np.sqrt(max(a["v"] + b["v"] - 2 * c, 1e-12))
+            return 2 * stats.norm.sf(abs(a["b"] - b["b"]) / se)
+
+        merged = False
+        while len(blocks) > 1:
+            ps = [p_value(blocks[i], blocks[i + 1]) for i in range(len(blocks) - 1)]
+            i = int(np.argmax(ps))
+            if ps[i] <= alpha:
+                break
+            a, b = blocks[i], blocks[i + 1]
+            if ref in a["groups"] + b["groups"]:                      # the reference stays at 0
+                new = {"b": 0.0, "v": 0.0}
+            else:                                                    # inverse-variance weighted
+                w_a, w_b = 1 / a["v"], 1 / b["v"]
+                new = {"b": (w_a * a["b"] + w_b * b["b"]) / (w_a + w_b), "v": 1 / (w_a + w_b)}
+            blocks[i:i + 2] = [{**new, "groups": a["groups"] + b["groups"]}]
+            merged = True
+        if not merged:
+            break
+        rename = {g: blocks[k]["groups"][0] for k in range(len(blocks)) for g in blocks[k]["groups"]}
+        group_of = {c: rename[g] for c, g in group_of.items()}
+
+    order = {g: f"Tier {k + 1}" for k, g in enumerate(groups)}      # groups is sorted by relativity
+    return {c: order[g] for c, g in group_of.items()}
+
+
+class TieredGammaGLM(GammaGLM):
+    """Gamma GLM with severity tiers in place of rating classes. The tiers are built from the
+    training data inside fit()."""
+
+    def __init__(self, interactions=None, name="Gamma GLM, severity tiers + interactions", alpha=0.05):
+        self.interactions, self.name, self.alpha = interactions, name, alpha
+
+    def _tiers(self, df):
+        out = df.copy()
+        out["severity_tier"] = pd.Categorical(out["injury_class"].astype(str).map(self.tier_of),
+                                              categories=self.tier_names)
+        return out
+
+    def fit(self, train):
+        self.tier_of = severity_tiers(train, self.interactions, self.alpha)
+        self.tier_names = sorted(set(self.tier_of.values()), key=lambda t: int(t.split()[1]))
+        self.ref_tier = self.tier_of[REF_CLASS]
+        self.rhs = _tier_rhs(self.ref_tier, self.interactions)
+        return super().fit(self._tiers(train))
+
+    def predict(self, df):
+        return super().predict(self._tiers(df))
+
+    def tier_table(self, df):
+        """One row per tier: multiplier vs. the reference tier, size, observed days, member classes."""
+        d = self._tiers(completed(df))
+        stats_ = d.groupby("severity_tier", observed=True)["days_missed"].agg(
+            injuries="size", mean_days="mean", median_days="median")
+        rel = relativities(self)
+        prefix = "severity_tier = "
+        stats_["multiplier"] = [1.0 if t == self.ref_tier else rel.loc[prefix + t, "multiplier"] for t in stats_.index]
+        stats_["ci_low"] = [1.0 if t == self.ref_tier else rel.loc[prefix + t, "ci_low"] for t in stats_.index]
+        stats_["ci_high"] = [1.0 if t == self.ref_tier else rel.loc[prefix + t, "ci_high"] for t in stats_.index]
+        members = pd.Series(self.tier_of).groupby(pd.Series(self.tier_of)).apply(lambda s: "; ".join(sorted(s.index)))
+        stats_["classes"] = members.reindex(stats_.index)
+        return stats_.round({"mean_days": 1, "median_days": 1, "multiplier": 3, "ci_low": 3, "ci_high": 3})
+
+
 class InverseGaussianGLM(GammaGLM):
     def fit(self, train):
         d = completed(train)
@@ -478,6 +580,7 @@ def default_models(interactions=None):
         GammaGLM("1", "Gamma, no predictors"),
         GammaGLM(RHS_MAIN, "Gamma GLM, main effects"),
         GammaGLM(final, "Gamma GLM, rating classes + interactions"),
+        TieredGammaGLM(interactions),
         InverseGaussianGLM(final, "Inverse Gaussian GLM"),
         LognormalModel(final, "Lognormal (OLS on log days)"),
         WeibullAFT(final, "Weibull AFT (uses open injuries)"),

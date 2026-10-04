@@ -257,8 +257,9 @@ sev.class_table(data)                      # the rating classes with their sizes
 - **Rating classes.** Each injury gets a class: body region × injury type (tear / fracture / surgery / ligament / strain / knock…). Combinations with fewer than 300 injuries are pooled, first by injury type ("Fracture - other sites"), then by body region, then into "Other (rare)". This gives 57 classes, each large enough for a credible average.
 - **Other predictors:** age and age²; position; prior injuries; re-injury within 60 days; same body part injured before; market value at the time of injury; **minutes played in the 12 months before the injury** and career minutes; year; offseason. Minutes count only seasons that had ended before the injury, so games played after it can't leak in.
 - **Interactions** are chosen by forward selection on a validation split of the training data: year × body region, market value × injury type, and minutes × body region.
+- **Severity tiers.** For the pricing table, the 57 rating classes are merged into **11 severity tiers**: neighbouring classes are merged until every pair of adjacent tiers differs significantly (p < 0.05). The tiers are built on training data only. Test accuracy is unchanged (deviance 0.9007 vs. 0.9001). Use `models["Gamma GLM, severity tiers + interactions"].tier_table(train)` to see them.
 - **Models compared:**
-  - gamma GLM, with main effects only and with rating classes + interactions
+  - gamma GLM, with main effects only, with rating classes + interactions, and with severity tiers + interactions
   - inverse Gaussian GLM
   - lognormal
   - Weibull AFT, which also uses injuries still open on the data date
@@ -266,7 +267,7 @@ sev.class_table(data)                      # the rating classes with their sizes
   - a no-predictor baseline
 - **Findings:**
   - **Rating classes:** they were the biggest improvement. Together with the interactions, they cut test deviance from 0.922 to 0.900 and closed half the gap to gradient boosting.
-  - **Expected cost:** the gamma GLM is the model for this; its relativities are the rating table.
+  - **Expected cost:** the gamma GLM with severity tiers is the model for this; its relativities are the rating table.
   - **Tail:** the lognormal still fits the shape of the distribution best, so use it for tail-based pricing.
 
 ### Career-ending: yes/no — `career.py`, `career_ending_model.ipynb`
