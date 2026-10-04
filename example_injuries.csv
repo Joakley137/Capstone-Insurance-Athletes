@@ -1,0 +1,6 @@
+player,injury,age,position,market_value,minutes_last_12_months,career_minutes,prior_injuries,same_body_part_before,returned_within_60_days,date
+Example A,Cruciate ligament tear,27,Defender,15000000,2500,15000,4,no,no,2026-10-01
+Example B,Cruciate ligament tear,33,Defender,,,,,no,no,2026-10-01
+Example C,Hamstring strain,24,Attack,40000000,2800,,,yes,no,2026-10-01
+Example D,Broken foot,30,Midfield,2000000,1500,20000,6,no,yes,2026-06-15
+Example E,flu,29,,,,,,,,

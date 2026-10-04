@@ -100,6 +100,20 @@ The two accuracy columns aren't directly comparable: each model is measured in i
   - **Formula:** expected cost ≈ chance the career ends × remaining contract + chance it doesn't × expected days out × daily salary.
   - **Example:** a 1% career-ending risk on a $50M remaining contract adds about $500,000 on its own.
 
+### Getting a prediction for a new injury
+
+`predict.py` takes an injury you describe and returns three things:
+- the expected days out
+- a realistic range: "half of similar injuries take under X days, 9 in 10 under Y"
+- the chance it ends the career
+
+For example, for a 27-year-old regular-starting defender worth €15M with a torn cruciate ligament:
+- **Expected time out:** 188 days
+- **Range:** half of similar injuries take under 188 days, and 9 in 10 under 319
+- **Chance the injury ends his career:** about 0.5%
+
+The same injury to a 33-year-old with typical playing time and market value comes out at 202 days and about a **5.5%** chance of ending his career. See the README for how to run it.
+
 ### Limitations
 
 - **Soccer only.** The other sports in the database don't yet record how long injuries lasted, so the numbers may not carry over to the NFL or NBA.

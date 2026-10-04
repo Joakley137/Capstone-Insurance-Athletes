@@ -286,6 +286,7 @@ class Design:
     def fit(self, df):
         X = dmatrix(self.rhs, df, return_type="dataframe")
         self.info = X.design_info
+        self._template = df.iloc[:1].copy()      # categoricals keep their full level lists
         A = X.to_numpy(float)
         norms = np.linalg.norm(A, axis=0)
         G = (A.T @ A) / np.outer(np.where(norms > 0, norms, 1), np.where(norms > 0, norms, 1))  # small k x k
@@ -302,6 +303,14 @@ class Design:
 
     def transform(self, df):
         return build_design_matrices([self.info], df, return_type="dataframe")[0][self.cols]
+
+    # patsy design info can't be pickled; rebuild it from the formula and a one-row template
+    def __getstate__(self):
+        return {k: v for k, v in self.__dict__.items() if k != "info"}
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self.info = dmatrix(self.rhs, self._template, return_type="dataframe").design_info
 
 
 def _gamma_glm(rhs, d):
@@ -467,10 +476,33 @@ class TieredGammaGLM(GammaGLM):
         self.tier_names = sorted(set(self.tier_of.values()), key=lambda t: int(t.split()[1]))
         self.ref_tier = self.tier_of[REF_CLASS]
         self.rhs = _tier_rhs(self.ref_tier, self.interactions)
-        return super().fit(self._tiers(train))
+        super().fit(self._tiers(train))
+        # Ranges: within each tier, how actual days compare with the prediction (actual / predicted),
+        # kept as 1,001 quantiles. Each tier gets its own spread; no distribution shape is assumed.
+        d = completed(train)
+        ratio = d["days_missed"].to_numpy() / self.predict(d)
+        tier = d["injury_class"].astype(str).map(self.tier_of).to_numpy()
+        grid = np.linspace(0, 1, 1001)
+        self.ratio_quantiles = {t: np.quantile(ratio[tier == t], grid) for t in self.tier_names}
+        return self
 
     def predict(self, df):
         return super().predict(self._tiers(df))
+
+    def _ratio_q(self, df):
+        tiers = df["injury_class"].astype(str).map(self.tier_of).to_numpy()
+        return np.vstack([self.ratio_quantiles[t] for t in tiers])
+
+    def range_ppf(self, df, q):
+        """Days below which a share q of injuries like these end (e.g. q=0.9 -> 90th percentile)."""
+        rq = self._ratio_q(df)
+        k = int(round(q * (rq.shape[1] - 1)))
+        return self.predict(df) * rq[:, k]
+
+    def range_sf(self, df, days):
+        """Chance an injury like these lasts longer than `days`."""
+        rq, mu = self._ratio_q(df), self.predict(df)
+        return np.array([1 - np.searchsorted(r, days / m, side="right") / len(r) for r, m in zip(rq, mu)])
 
     def tier_table(self, df):
         """One row per tier: multiplier vs. the reference tier, size, observed days, member classes."""

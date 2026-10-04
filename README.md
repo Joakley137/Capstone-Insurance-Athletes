@@ -1,11 +1,24 @@
 # Sports Injury & Contract Database
 
-A MySQL database (`sports_injury`) plus:
+A MySQL database (`sports_injury`) of athlete injuries, contracts and market values, plus models that predict how long an injury keeps a player out and whether it ends his career. Results in plain language: **[MODEL_SUMMARY.md](MODEL_SUMMARY.md)**.
 
-- **build_db.py** downloads nothing on its own; it loads the files you download into the database.
-- **sportsdb.py** pulls data back out as pandas DataFrames.
-- **explore.ipynb** is a short notebook that connects and pulls a sample of each table.
-- **severity.py** / **severity_models.ipynb** model how many days an injury keeps a player out (gamma GLM and alternatives), and **career.py** / **career_ending_model.ipynb** model whether it ends his career; see [Injury models](#injury-models).
+## Files
+
+| File | What it is |
+|---|---|
+| [README.md](README.md) | This page: setup, loading the data, the database schema, the models and how to run them. |
+| [MODEL_SUMMARY.md](MODEL_SUMMARY.md) | The model results and most important predictors, with a plain-language explanation for readers new to modeling. |
+| [build_db.py](build_db.py) | Creates the database tables and loads each data source you download (NBA, NFL, soccer, MLB, ESPN, any CSV). It doesn't download anything on its own. |
+| [sportsdb.py](sportsdb.py) | Pulls data back out of the database as pandas tables: `sdb.injuries(...)`, `sdb.contracts(...)`, `sdb.players(...)` and so on. |
+| [severity.py](severity.py) | The severity model: how many days an injury keeps a player out. Builds the modeling table, the rating classes and severity tiers, and fits and compares the gamma GLM and alternatives. |
+| [career.py](career.py) | The career-ending model: the chance an injury ends the player's career (logistic regression), with its comparison models. |
+| [predict.py](predict.py) | Predictions for injuries you describe: expected days out, a likely range and the career-ending chance, for one injury or a whole CSV. |
+| [example_injuries.csv](example_injuries.csv) | Example input for `predict.py --csv`, showing the columns it accepts. |
+| [explore.ipynb](explore.ipynb) | Short notebook that connects to the database and shows a sample of each table. |
+| [severity_models.ipynb](severity_models.ipynb) | The severity model step by step, with charts: data, rating classes, interaction search, model comparison, relativities, severity tiers and conclusions. |
+| [career_ending_model.ipynb](career_ending_model.ipynb) | The career-ending model step by step: how "career-ending" is defined and checked, model comparison, calibration, odds ratios and conclusions. |
+| [requirements.txt](requirements.txt) | Python packages to install (`pip install -r requirements.txt`). |
+| [.gitignore](.gitignore) | Keeps downloaded data (`data/`), the virtual environment and saved model files (`models/`) out of the repository. |
 
 `python build_db.py init` creates the tables, the 14-source registry and the insurance case studies; the injury and contract tables are empty until you run the loaders.
 
@@ -288,6 +301,31 @@ career.odds_ratios(models["Logistic GLM, main effects"])
 - **Predictors** are only what is known on the day of the injury; how long the injury lasted is not used.
 - **Result:** the main-effects logistic GLM has an AUC of 0.87, and its riskiest 10% of injuries contain 61% of the career-ending ones. Interactions and gradient boosting did not beat it on held-out data.
 - **Biggest risk factors:** knee or Achilles injuries (about 8× the odds of a hamstring injury), surgery or a tear (about 3×), age, little recent playing time, and playing outside the leagues that have market values.
+
+### Predicting your own injuries — `predict.py`
+
+Describe an injury and get expected days out, a realistic range and the chance it ends the player's career:
+
+```bash
+python predict.py --injury "Cruciate ligament tear" --age 27 --position Defender \
+                  --market-value 15000000 --minutes-last-12-months 2500 --career-minutes 15000 --prior-injuries 4
+```
+```
+Read as: Tear / rupture — Knee  (rating class 'Knee - Tear / rupture', Tier 12 of 12, higher = longer)
+Expected time out: 188 days
+Likely range: half of similar injuries take under 188 days, 3 in 4 under 250, 9 in 10 under 319
+Chance of missing more than 90 days: 76%;  more than 180 days: 53%
+Chance this injury ends the career: 0.47%  (average injury: about 0.42%)
+Filled in with typical values: nothing
+```
+
+- **Many injuries at once:** `python predict.py --csv example_injuries.csv --out predictions.csv`. `example_injuries.csv` shows the columns; only `age` and `injury` are required.
+- **From Python:** `predict.injury("Broken foot", age=30, position="Midfield")` returns the same numbers as a Series.
+- **Describing the injury:** use words, the way Transfermarkt does ("Hamstring strain", "Broken foot"), or pass `--body-part` / `--injury-type` directly. The output shows how the description was read, so you can check it.
+- **Missing inputs** get a typical value (the median player), and the output lists what was filled in.
+- **Market value:** a market value of 0 means "no market value", i.e. a lower-league player. That raises the career-ending risk about 4×.
+- **Where the range comes from:** how actual injuries in the same severity tier spread around the model's prediction. On held-out players, about half fall below the predicted median and 10% above the 90th percentile, in every tier.
+- **Fitting:** the first run fits the models on all the data and saves them to `models/` (about a minute; not committed). Later runs are instant. After reloading data, run `python predict.py --refit`. Fitted on all the data rather than the 80% training split, the tier merge finds 12 tiers rather than 11.
 
 ## Things to know
 
