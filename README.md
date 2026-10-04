@@ -55,6 +55,125 @@ sdb.query("SELECT team, COUNT(*) n FROM injuries WHERE sport='NBA' GROUP BY team
 sdb.query("SELECT * FROM injuries WHERE team = :team", {"team": "Lakers"})   # :named parameters
 ```
 
+## Schema
+
+Solid lines are foreign keys. Dotted lines are joins on `player_key` + `sport` that the views and `sportsdb.py` use but the database doesn't enforce.
+
+```mermaid
+erDiagram
+    sources ||--o{ injuries : "source_id"
+    sources ||--o{ contracts : "source_id"
+    sources ||--o{ market_values : "source_id"
+    sources ||..o{ load_log : "source_id"
+    contracts }o..o{ injuries : "player_key + sport"
+    contracts }o..o{ market_values : "player_key + sport"
+    insurance_cases }o..o{ contracts : "player_key + sport"
+
+    sources {
+        INT source_id PK
+        VARCHAR name
+        TEXT url
+        VARCHAR sport
+        VARCHAR level
+        VARCHAR coverage
+        VARCHAR format
+        TINYINT has_injury
+        TINYINT has_contract
+        TINYINT has_insurance
+        TINYINT has_nil
+        TEXT role_in_model
+        TEXT access_notes
+        VARCHAR status "Not started / Collected"
+        TEXT notes
+    }
+
+    injuries {
+        INT injury_id PK
+        INT source_id FK
+        VARCHAR record_type "event / weekly_report / snapshot"
+        VARCHAR sport
+        VARCHAR league
+        VARCHAR level
+        VARCHAR season
+        INT week
+        VARCHAR player_name
+        VARCHAR player_key "normalized name"
+        VARCHAR ext_player_id
+        VARCHAR team
+        VARCHAR position
+        DATE injury_date
+        VARCHAR return_date
+        INT days_missed
+        INT games_missed
+        VARCHAR body_part
+        TEXT injury_desc
+        VARCHAR status
+        DATE snapshot_date
+        DATETIME loaded_at
+    }
+
+    contracts {
+        INT contract_id PK
+        INT source_id FK
+        VARCHAR sport
+        VARCHAR league
+        VARCHAR level
+        VARCHAR player_name
+        VARCHAR player_key
+        VARCHAR ext_player_id
+        VARCHAR team
+        VARCHAR position
+        VARCHAR season "per-season salary rows"
+        INT year_signed "whole-contract rows"
+        INT years
+        DOUBLE total_value "USD"
+        DOUBLE apy "USD"
+        DOUBLE guaranteed "USD"
+        DOUBLE salary "USD"
+        DATETIME loaded_at
+    }
+
+    market_values {
+        INT mv_id PK
+        INT source_id FK
+        VARCHAR sport
+        VARCHAR league
+        VARCHAR player_name
+        VARCHAR player_key
+        VARCHAR ext_player_id
+        DATE value_date
+        DOUBLE market_value
+        VARCHAR currency
+        DATETIME loaded_at
+    }
+
+    insurance_cases {
+        INT case_id PK
+        VARCHAR player_name
+        VARCHAR player_key
+        VARCHAR sport
+        VARCHAR team
+        DOUBLE contract_total
+        DOUBLE guaranteed
+        TEXT injury
+        VARCHAR seasons_affected
+        INT games_missed
+        DOUBLE reported_payout
+        VARCHAR source_ids
+        TEXT notes
+    }
+
+    load_log {
+        INT source_id
+        VARCHAR target
+        INT rows
+        TEXT file
+        DATETIME loaded_at
+    }
+```
+
+The views are built on top of these tables. `v_injury_summary` totals `injuries` per player and season. `v_contracts_with_injuries` adds each player's career totals from that summary to every `contracts` row. Every loader also saves its source file untouched in a `raw_<name>` table (e.g. `raw_nfl_injuries`). Those tables aren't in the diagram because their columns are whatever the source file has.
+
 ## Tables
 
 - **injuries** — every sport in one shape. `record_type` tells you what a row is: `event` (one injury with start/return dates), `weekly_report` (NFL weekly status line), or `snapshot` (a live-page reading on a given date).
