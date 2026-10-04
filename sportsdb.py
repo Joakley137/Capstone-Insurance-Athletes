@@ -5,6 +5,7 @@ sportsdb.py — pull data from the sports_injury MySQL database into pandas.
     inj  = sdb.injuries(sport="NBA", seasons=["2015-16", "2016-17"])
     pay  = sdb.contracts(sport="NFL", min_apy=20_000_000)
     both = sdb.contracts_with_injuries(sport="NFL")
+    ages = sdb.injuries_with_age(sport="Soccer")      # + age_at_injury, position_group
     df   = sdb.query("SELECT body_part, COUNT(*) n FROM injuries GROUP BY 1 ORDER BY n DESC")
     df   = sdb.query("SELECT * FROM injuries WHERE team = :team", {"team": "Lakers"})
 
@@ -87,6 +88,28 @@ def market_values(sport=None, player=None):
         w += (" AND " if w else " WHERE ") + "player_key LIKE :player"
         p["player"] = f"%{player.lower()}%"
     return query(f"SELECT * FROM market_values{w} ORDER BY player_key, value_date", p)
+
+
+def players(sport=None, player=None):
+    """Player profiles: birth date, height, foot, position."""
+    w, p = _where(sport=sport)
+    if player:
+        w += (" AND " if w else " WHERE ") + "player_key LIKE :player"
+        p["player"] = f"%{player.lower()}%"
+    return query(f"SELECT * FROM players{w}", p)
+
+
+def player_seasons(sport=None, player_id=None):
+    """Appearances and minutes per player, season and competition. player_id is the source's id
+    (ext_player_id, the Transfermarkt id for soccer)."""
+    w, p = _where(sport=sport, ext_player_id=player_id)
+    return query(f"SELECT * FROM player_seasons{w} ORDER BY ext_player_id, season_start", p)
+
+
+def injuries_with_age(sport=None, seasons=None, body_part=None, record_type=None):
+    """Injury rows plus the player's age on the injury date, position group and height."""
+    w, p = _where(sport=sport, season=seasons, body_part=body_part, record_type=record_type)
+    return query(f"SELECT * FROM v_injuries_with_age{w} ORDER BY sport, injury_date", p)
 
 
 def injury_summary(sport=None, seasons=None):

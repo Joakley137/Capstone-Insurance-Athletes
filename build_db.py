@@ -6,7 +6,7 @@ The database itself must exist first:  mysql -u root -e "CREATE DATABASE sports_
 
 Every loader writes two things:
   1. a raw_<name> table with the source file exactly as downloaded (nothing lost), and
-  2. normalized rows in the shared tables (injuries, contracts, market_values),
+  2. normalized rows in the shared tables (injuries, contracts, market_values, players, player_seasons),
      so every sport can be queried the same way.
 
 Re-running a loader replaces that source's rows, so it is safe to reload.
@@ -17,6 +17,8 @@ Usage (run `python build_db.py -h` for all options):
   python build_db.py nba-salaries  data/nba_salaries/<file>.csv
   python build_db.py nfl           --seasons 2012-2025
   python build_db.py soccer        data/football-datasets
+  python build_db.py soccer-players data/football-datasets      (profiles only: birth dates, positions)
+  python build_db.py soccer-seasons data/football-datasets      (appearances and minutes per season only)
   python build_db.py mlb-fangraphs data/fangraphs_2023.csv --season 2023
   python build_db.py espn-nba
   python build_db.py import-csv    data/ncaa_isp.csv --source-id 3 --table injuries \
@@ -30,6 +32,7 @@ import os
 import re
 import sys
 
+import numpy as np
 import pandas as pd
 import sqlalchemy as sa
 
@@ -127,6 +130,51 @@ CREATE TABLE IF NOT EXISTS market_values (
     INDEX ix_mv_player (player_key, sport)
 );
 
+-- One row per player profile (birth date, position). Join to injuries on ext_player_id + sport.
+CREATE TABLE IF NOT EXISTS players (
+    player_id      INT PRIMARY KEY AUTO_INCREMENT,
+    source_id      INT,
+    sport          VARCHAR(50),
+    player_name    VARCHAR(255),
+    player_key     VARCHAR(255),
+    ext_player_id  VARCHAR(100),
+    date_of_birth  DATE,
+    height_cm      DOUBLE,
+    foot           VARCHAR(20),
+    position       VARCHAR(100),    -- detailed, e.g. 'Defender - Right-Back'
+    position_group VARCHAR(50),     -- Goalkeeper | Defender | Midfield | Attack
+    citizenship    VARCHAR(100),
+    current_club   VARCHAR(255),    -- 'Retired', 'Without Club', or a club name, as of the download
+    date_of_death  DATE,
+    loaded_at      DATETIME,
+    FOREIGN KEY (source_id) REFERENCES sources(source_id),
+    INDEX ix_pl_ext (ext_player_id, sport),
+    INDEX ix_pl_player (player_key, sport)
+);
+
+-- Appearances and minutes per player, season and competition. Join to injuries on ext_player_id + sport.
+CREATE TABLE IF NOT EXISTS player_seasons (
+    ps_id             INT PRIMARY KEY AUTO_INCREMENT,
+    source_id         INT,
+    sport             VARCHAR(50),
+    ext_player_id     VARCHAR(100),
+    season            VARCHAR(20),     -- '23/24' (July-June) or '2023' (calendar-year leagues)
+    season_start      DATE,
+    season_end        DATE,
+    competition       VARCHAR(255),
+    team              VARCHAR(255),
+    squad_selections  INT,             -- times named in the matchday squad
+    appearances       INT,
+    subbed_in         INT,
+    subbed_out        INT,
+    goals             INT,
+    minutes           DOUBLE,
+    minutes_estimated TINYINT,         -- 1 = estimated from appearances and substitutions
+    loaded_at         DATETIME,
+    FOREIGN KEY (source_id) REFERENCES sources(source_id),
+    INDEX ix_ps_player (ext_player_id, sport, season_end)
+);
+
 CREATE TABLE IF NOT EXISTS insurance_cases (
     case_id            INT PRIMARY KEY AUTO_INCREMENT,
     player_name        VARCHAR(255),
@@ -178,6 +226,16 @@ LEFT JOIN (
            SUM(weeks_out)     AS career_weeks_out
     FROM v_injury_summary GROUP BY sport, player_key
 ) i ON i.sport = c.sport AND i.player_key = c.player_key;
+
+-- Every injury with the player's age on the injury date (NULL where no profile or birth date is loaded)
+CREATE OR REPLACE VIEW v_injuries_with_age AS
+SELECT i.*,
+       p.date_of_birth,
+       ROUND(DATEDIFF(i.injury_date, p.date_of_birth) / 365.25, 2) AS age_at_injury,
+       p.position_group,
+       p.height_cm
+FROM injuries i
+LEFT JOIN players p ON p.sport = i.sport AND p.ext_player_id = i.ext_player_id;
 """
 
 SOURCES = [
@@ -230,20 +288,37 @@ CONTRACT_COLS = ["source_id", "sport", "league", "level", "player_name", "player
                  "season", "year_signed", "years", "total_value", "apy", "guaranteed", "salary", "loaded_at"]
 MV_COLS = ["source_id", "sport", "league", "player_name", "player_key", "ext_player_id", "value_date",
            "market_value", "currency", "loaded_at"]
-TABLE_COLS = {"injuries": INJURY_COLS, "contracts": CONTRACT_COLS, "market_values": MV_COLS}
+PLAYER_COLS = ["source_id", "sport", "player_name", "player_key", "ext_player_id", "date_of_birth", "height_cm",
+               "foot", "position", "position_group", "citizenship", "current_club", "date_of_death", "loaded_at"]
+SEASON_COLS = ["source_id", "sport", "ext_player_id", "season", "season_start", "season_end", "competition", "team",
+               "squad_selections", "appearances", "subbed_in", "subbed_out", "goals", "minutes", "minutes_estimated",
+               "loaded_at"]
+TABLE_COLS = {"injuries": INJURY_COLS, "contracts": CONTRACT_COLS, "market_values": MV_COLS, "players": PLAYER_COLS,
+              "player_seasons": SEASON_COLS}
 
 # --------------------------------------------------------------------------
 # Helpers
 # --------------------------------------------------------------------------
 BODY_PARTS = [
     ("achilles", "Achilles"), ("acl", "Knee"), ("mcl", "Knee"), ("meniscus", "Knee"), ("patell", "Knee"),
-    ("knee", "Knee"), ("ankle", "Ankle"), ("hamstring", "Hamstring"), ("groin", "Groin"), ("adductor", "Groin"),
-    ("calf", "Calf"), ("quad", "Quadriceps"), ("thigh", "Thigh"), ("hip", "Hip"), ("back", "Back"),
+    ("knee", "Knee"), ("cruciate", "Knee"), ("inner ligament", "Knee"), ("outer ligament", "Knee"),
+    ("syndesmo", "Ankle"), ("ankle", "Ankle"), ("hamstring", "Hamstring"), ("groin", "Groin"), ("adductor", "Groin"),
+    ("pubic", "Groin"), ("pubalgia", "Groin"),
+    ("calf", "Calf"), ("quad", "Quadriceps"), ("thigh", "Thigh"), ("dead leg", "Thigh"), ("hip", "Hip"),
+    ("fibula", "Lower leg"), ("tibia", "Lower leg"), ("shin", "Lower leg"), ("back", "Back"),
     ("spine", "Back"), ("lumbar", "Back"), ("shoulder", "Shoulder"), ("rotator", "Shoulder"), ("labrum", "Shoulder"),
+    ("collarbone", "Shoulder"), ("clavicle", "Shoulder"),
     ("elbow", "Elbow"), ("ucl", "Elbow"), ("tommy john", "Elbow"), ("wrist", "Wrist"), ("hand", "Hand"),
     ("finger", "Hand"), ("thumb", "Hand"), ("foot", "Foot"), ("toe", "Foot"), ("plantar", "Foot"),
-    ("concussion", "Head"), ("head", "Head"), ("neck", "Neck"), ("rib", "Ribs"), ("oblique", "Core"),
+    ("metatars", "Foot"), ("concussion", "Head"), ("head", "Head"), ("nose", "Head"), ("face", "Head"),
+    ("facial", "Head"), ("cheek", "Head"), ("jaw", "Head"), ("eye", "Head"), ("skull", "Head"),
+    ("neck", "Neck"), ("rib", "Ribs"), ("oblique", "Core"),
     ("abdomin", "Core"), ("chest", "Chest"), ("pectoral", "Chest"), ("illness", "Illness"), ("covid", "Illness"),
+    ("corona", "Illness"), ("ill", "Illness"), ("flu", "Illness"), ("influenza", "Illness"), ("cold", "Illness"),
+    ("fever", "Illness"), ("virus", "Illness"), ("infection", "Illness"), ("stomach", "Illness"),
+    ("quarantine", "Illness"),
+    # last, so a named muscle (hamstring, calf, ...) wins over the generic word
+    ("muscle", "Muscle (unspecified)"), ("muscular", "Muscle (unspecified)"),
 ]
 
 SUFFIX = re.compile(r"\b(jr|sr|ii|iii|iv|v)\b\.?")
@@ -491,6 +566,7 @@ def cmd_soccer(args):
     find = lambda *words: [f for f in files if all(w in os.path.basename(f).lower() for w in words)]
     inj_files, mv_files = find("injur"), find("market", "value")
     prof_files = find("profile")
+    perf_files = [f for f in files if os.path.basename(f).lower().startswith("player_performances")]
     if not inj_files and not mv_files:
         sys.exit(f"No injury or market-value CSVs found under {args.repo}. Files seen: {files[:20]}")
 
@@ -511,6 +587,10 @@ def cmd_soccer(args):
         return pid, nm
 
     con = connect()
+    if prof_files:
+        load_soccer_players(con, prof_files[0])
+    if perf_files:
+        load_soccer_seasons(con, perf_files[0])
     if inj_files:
         raw = pd.concat([pd.read_csv(f, low_memory=False) for f in inj_files], ignore_index=True)
         pid, nm = attach_names(raw)
@@ -538,6 +618,91 @@ def cmd_soccer(args):
             "currency": "EUR",
         })
         write(con, "market_values", out, 9, raw=raw, raw_name="soccer_market_values", file=";".join(mv_files))
+
+
+def load_soccer_players(con, path):
+    """Transfermarkt player_profiles.csv -> players (birth date, height, foot, position)."""
+    raw = pd.read_csv(path, low_memory=False)
+    pid_c = pick(raw, "player_id", "id", required=True)
+    raw = raw.drop_duplicates(pid_c)
+    name = col(raw, "player_name", "name").astype("string").str.replace(r"\s*\(\d+\)$", "", regex=True)
+    height = pd.to_numeric(col(raw, "height"), errors="coerce")
+    out = pd.DataFrame({
+        "sport": "Soccer", "player_name": name, "player_key": name.map(player_key),
+        "ext_player_id": raw[pid_c].astype(str),
+        "date_of_birth": iso(col(raw, "date_of_birth", "Date of birth", "dob")),
+        "height_cm": height.where(height.between(140, 220)),          # 0 = unknown
+        "foot": col(raw, "foot").replace({"N/A": None}),
+        "position": col(raw, "position"),
+        "position_group": col(raw, "main_position", "player_main_position", "position_group"),
+        "citizenship": col(raw, "citizenship"),
+        "current_club": col(raw, "current_club_name", "Current club"),
+        "date_of_death": iso(col(raw, "date_of_death", "Date of death")),
+    })
+    write(con, "players", out, 9, raw=raw, raw_name="soccer_players", file=path)
+
+
+def season_dates(season):
+    """'23/24' -> 2023-07-01 .. 2024-06-30;  '2023' -> 2023-01-01 .. 2023-12-31."""
+    s = season.astype(str).str.strip()
+    yy = pd.to_numeric(s.str.extract(r"^(\d{2})/\d{2}$")[0], errors="coerce").astype(float)
+    split_year = yy + np.where(yy > 50, 1900, 2000)
+    cal_year = pd.to_numeric(s.str.extract(r"^(\d{4})$")[0], errors="coerce").astype(float)
+    start = pd.to_datetime(dict(year=split_year.fillna(cal_year), month=np.where(yy.notna(), 7, 1), day=1),
+                           errors="coerce")
+    end = pd.to_datetime(dict(year=split_year.fillna(cal_year - 1) + 1, month=np.where(yy.notna(), 6, 12),
+                              day=np.where(yy.notna(), 30, 31)), errors="coerce")
+    return start.dt.strftime("%Y-%m-%d"), end.dt.strftime("%Y-%m-%d")
+
+
+def load_soccer_seasons(con, path):
+    """Transfermarkt player_performances.csv -> player_seasons.
+
+    Its `minutes_played` column is really minutes PER GOAL (blank when the player didn't score), so
+    minutes = minutes_played x goals where there are goals. Otherwise minutes are estimated from
+    appearances: 90 per full game, 73.5 when subbed off, 18.5 when subbed on. Fitted on the seasons where
+    minutes are known, that estimate has R^2 = 0.996 and a median error of 3%."""
+    raw = pd.read_csv(path, low_memory=False)
+    num = lambda *c: pd.to_numeric(col(raw, *c), errors="coerce").fillna(0)
+    apps, sub_in, sub_out, goals = num("nb_on_pitch", "appearances"), num("subed_in"), num("subed_out"), num("goals")
+    per_goal = pd.to_numeric(col(raw, "minutes_played"), errors="coerce")
+    exact = per_goal * goals
+    estimate = 90 * (apps - sub_in - sub_out).clip(lower=0) + 73.5 * sub_out + 18.5 * sub_in
+    has_exact = (goals > 0) & exact.notna()
+    start, end = season_dates(col(raw, "season_name", "season"))
+    out = pd.DataFrame({
+        "sport": "Soccer", "ext_player_id": col(raw, "player_id").astype(str),
+        "season": col(raw, "season_name", "season"), "season_start": start, "season_end": end,
+        "competition": col(raw, "competition_name"), "team": col(raw, "team_name"),
+        "squad_selections": num("nb_in_group"), "appearances": apps, "subbed_in": sub_in, "subbed_out": sub_out,
+        "goals": goals, "minutes": exact.where(has_exact, estimate).round(),
+        "minutes_estimated": (~has_exact).astype(int),
+    })
+    write(con, "player_seasons", out, 9, raw=raw, raw_name="soccer_player_seasons", file=path)
+
+
+def cmd_soccer_players(args):
+    """Load only the player profiles (useful when injuries are already loaded)."""
+    path = args.path
+    if os.path.isdir(path):
+        found = [f for f in glob.glob(os.path.join(path, "**", "*.csv"), recursive=True)
+                 if "profile" in os.path.basename(f).lower()]
+        if not found:
+            sys.exit(f"No player_profiles CSV found under {path}")
+        path = found[0]
+    load_soccer_players(connect(), path)
+
+
+def cmd_soccer_seasons(args):
+    """Load only appearances and minutes per season."""
+    path = args.path
+    if os.path.isdir(path):
+        found = [f for f in glob.glob(os.path.join(path, "**", "*.csv"), recursive=True)
+                 if os.path.basename(f).lower().startswith("player_performances")]
+        if not found:
+            sys.exit(f"No player_performances CSV found under {path} (it is a Git LFS file: run `git lfs pull` there)")
+        path = found[0]
+    load_soccer_seasons(connect(), path)
 
 
 def cmd_mlb_fangraphs(args):
@@ -630,6 +795,8 @@ def main():
     s = sub.add_parser("nba-salaries"); s.add_argument("path"); s.set_defaults(fn=cmd_nba_salaries)
     s = sub.add_parser("nfl"); s.add_argument("--seasons", default="2012-2025"); s.set_defaults(fn=cmd_nfl)
     s = sub.add_parser("soccer"); s.add_argument("repo"); s.set_defaults(fn=cmd_soccer)
+    s = sub.add_parser("soccer-players"); s.add_argument("path"); s.set_defaults(fn=cmd_soccer_players)
+    s = sub.add_parser("soccer-seasons"); s.add_argument("path"); s.set_defaults(fn=cmd_soccer_seasons)
     s = sub.add_parser("mlb-fangraphs"); s.add_argument("path"); s.add_argument("--season", required=True)
     s.set_defaults(fn=cmd_mlb_fangraphs)
     sub.add_parser("espn-nba").set_defaults(fn=cmd_espn_nba)
@@ -643,7 +810,7 @@ def main():
     global DB_URL
     if args.db:
         DB_URL = args.db
-    if args.cmd != "init" and not sa.inspect(connect()).has_table("sources"):
+    if args.cmd != "init" and not all(sa.inspect(connect()).has_table(t) for t in ["sources", *TABLE_COLS]):
         cmd_init(args)
     args.fn(args)
 

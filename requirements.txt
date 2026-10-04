@@ -7,3 +7,8 @@ lxml
 nflreadpy
 kaggle
 jupyterlab
+scipy
+statsmodels
+scikit-learn
+lifelines
+matplotlib
