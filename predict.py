@@ -1,28 +1,20 @@
 """
-predict.py — predictions for injuries you describe.
+predict.py — days out (tiered gamma GLM) and career-ending chance (logistic GLM) for described injuries.
 
     python predict.py --injury "Cruciate ligament tear" --age 27 --position Defender \\
-                      --market-value 15000000 --minutes-last-12-months 2500
-    python predict.py --csv my_injuries.csv              # one prediction per row -> printed / --out file.csv
-    python predict.py --refit                            # refit the saved models (after reloading data)
+                      --minutes-last-12-months 2500
+    python predict.py --csv my_injuries.csv [--out preds.csv]
+    python predict.py --refit
 
     import predict
-    predict.injury("Cruciate ligament tear", age=27, position="Defender", market_value=15e6)
-    predict.from_csv("my_injuries.csv")
+    predict.injury("Cruciate ligament tear", age=27, position="Defender")
 
-You get:
-  * expected days out (gamma GLM with severity tiers) and the severity tier,
-  * a realistic range — median, 75th and 90th percentile, chance of missing more than 90 / 180 days —
-    from how actual injuries in the same tier spread around the model's prediction (checked on held-out
-    players: about 50% fall below the predicted median and 10% above the 90th percentile, in every tier),
-  * the probability the injury ends the player's career (logistic GLM).
+Days out depend on the injury (its severity tier), position, age, prior injuries, a recent
+re-injury and the same body part injured before. Minutes in the last 12 months, career
+minutes and the date only affect the career-ending chance, not days out.
 
-The injury is described in words, like the Transfermarkt descriptions ("Hamstring strain", "Broken
-foot"), or with body_part= and injury_type= directly. Anything you leave out is set to a typical value
-(the median player in the data) and listed under `assumed`, so you can see what the prediction rests on.
-
-The models are fitted once on all the soccer data and saved to models/injury_models.pkl; that first
-run takes a couple of minutes, later ones are instant. Predictions are for professional soccer.
+Omitted inputs are set to the data median and listed under `assumed`.
+Models are fitted once on all soccer data and cached in models/injury_models.pkl.
 """
 import argparse
 import datetime as dt
@@ -46,7 +38,7 @@ BODY_PARTS = sorted({part for _, part in build_db.BODY_PARTS} | {"Unknown"})
 # Fitting and saving
 # --------------------------------------------------------------------------
 def _slim(model):
-    """Drop the per-row training arrays statsmodels keeps, so the saved file stays small."""
+    """Drop statsmodels' stored training data to keep the pickle small."""
     model.res.remove_data()
     return model
 
@@ -54,8 +46,12 @@ def _slim(model):
 def fit_and_save(path=MODEL_FILE):
     print("Fitting the models on all the soccer data (a couple of minutes, once) ...", flush=True)
     data = sev.build_dataset()
-    tiered = _slim(sev.TieredGammaGLM().fit(data))
     cdata = career.build_dataset()
+
+    # ==================================================================
+    # GLM FIT — tiered gamma (days out) + logistic (career-ending)
+    # ==================================================================
+    tiered = _slim(sev.TieredGammaGLM().fit(data))
     car = _slim(career.LogisticGLM(career.RHS_MAIN).fit(cdata))
 
     cells = data.groupby(["region", "nature"], observed=True)["injury_class"].first().astype(str)
@@ -64,7 +60,6 @@ def fit_and_save(path=MODEL_FILE):
         "class_of": {(r, n): c for (r, n), c in cells.items()},
         "classes": sorted(data["injury_class"].astype(str).unique()),
         "typical": {"prior_injuries": float(data["prior_injuries"].median()),
-                    "market_value": float(np.exp(data["log_mv"].median())),
                     "games_12m": float(data["games_12m"].median()),
                     "career_games": float(data["career_games"].median())},
         "career_last_year": int(cdata["year"].max()),
@@ -94,8 +89,7 @@ def models(refit=False):
 # Building the feature row
 # --------------------------------------------------------------------------
 def _rating_class(b, region, nature):
-    """Same rule as severity.injury_classes: the combination's own class if it has one, otherwise
-    the pooled class for that injury type, then for that body region, then 'Other (rare)'."""
+    """Mirror severity.injury_classes: own class, else type pool, region pool, 'Other (rare)'."""
     if (region, nature) in b["class_of"]:
         return b["class_of"][(region, nature)]
     by_type = ("Unspecified injury" if nature == "Unspecified" else nature) + " - other sites"
@@ -105,8 +99,7 @@ def _rating_class(b, region, nature):
     return sev.REF_CLASS
 
 
-def _row(b, injury=None, age=None, position=None, body_part=None, injury_type=None, market_value=None,
-         minutes_last_12_months=None, career_minutes=None, prior_injuries=None, same_body_part_before=False,
+def _row(b, injury=None, age=None, position=None, body_part=None, injury_type=None, minutes_last_12_months=None, career_minutes=None, prior_injuries=None, same_body_part_before=False,
          returned_within_60_days=False, date=None):
     if age is None:
         raise ValueError("age is required")
@@ -136,11 +129,6 @@ def _row(b, injury=None, age=None, position=None, body_part=None, injury_type=No
     career_games = t["career_games"] if career_minutes is None else career_minutes / 90
     if career_minutes is None:
         assumed.append(f"career minutes = {career_games * 90:,.0f}")
-    if market_value is None:
-        market_value = t["market_value"]
-        assumed.append(f"market value = EUR {market_value:,.0f}")
-    elif market_value <= 0:      # 0 = explicitly no market value: a player outside the valued leagues
-        market_value = None
     when = pd.Timestamp(date) if date else pd.Timestamp(dt.date.today())
 
     region = sev.REGIONS.get(part, part)
@@ -150,9 +138,6 @@ def _row(b, injury=None, age=None, position=None, body_part=None, injury_type=No
         "age": float(age), "age_c": float(age) - 26,
         "prior_injuries": float(prior_injuries), "reinjury_60d": int(bool(returned_within_60_days)),
         "prior_same_part": int(bool(same_body_part_before)),
-        "log_mv": np.log(market_value) if market_value else np.nan,
-        "log_mv_c": np.log(market_value) - sev.LOG_MV_CENTER if market_value else 0.0,
-        "mv_missing": int(not market_value),
         "games_12m": float(games_12m), "no_games_12m": int(games_12m <= 0), "career_games": float(career_games),
         "year": when.year, "year_c": when.year - 2015, "offseason": int(when.month in (6, 7)),
     }
@@ -176,7 +161,7 @@ def _predict_frame(b, rows):
     out["p90_days"] = tiered.range_ppf(df, 0.9).round(0)
     out["chance_over_90_days"] = tiered.range_sf(df, 90).round(3)
     out["chance_over_180_days"] = tiered.range_sf(df, 180).round(3)
-    # The career data ends earlier; its year trend mostly reflects data coverage, so don't extrapolate it
+    # Don't extrapolate the career model's year trend past its data
     cdf = df.assign(year_c=np.minimum(df["year"], b["career_last_year"]) - 2015)
     for c in ["region", "nature", "position_group"]:
         cdf[c] = cdf[c].astype(str)
@@ -184,25 +169,27 @@ def _predict_frame(b, rows):
     return out
 
 
-def injury(injury=None, *, age, position=None, body_part=None, injury_type=None, market_value=None,
-           minutes_last_12_months=None, career_minutes=None, prior_injuries=None, same_body_part_before=False,
+def injury(injury=None, *, age, position=None, body_part=None, injury_type=None, minutes_last_12_months=None, career_minutes=None, prior_injuries=None, same_body_part_before=False,
            returned_within_60_days=False, date=None):
-    """Predict one injury. Returns a pandas Series; `assumed` lists the inputs that were filled in."""
+    """Predict one injury -> pandas Series (`assumed` lists filled-in inputs).
+
+    minutes_last_12_months, career_minutes and date only feed the career-ending
+    chance; days out don't use them.
+    """
     b = models()
-    row, assumed = _row(b, injury, age, position, body_part, injury_type, market_value, minutes_last_12_months,
-                        career_minutes, prior_injuries, same_body_part_before, returned_within_60_days, date)
+    row, assumed = _row(b, injury, age, position, body_part, injury_type, minutes_last_12_months, career_minutes,
+                        prior_injuries, same_body_part_before, returned_within_60_days, date)
     out = _predict_frame(b, [row]).iloc[0]
     out["assumed"] = "; ".join(assumed) or "nothing"
     return out
 
 
-CSV_COLUMNS = ["injury", "age", "position", "body_part", "injury_type", "market_value", "minutes_last_12_months",
+CSV_COLUMNS = ["injury", "age", "position", "body_part", "injury_type", "minutes_last_12_months",
                "career_minutes", "prior_injuries", "same_body_part_before", "returned_within_60_days", "date"]
 
 
 def from_csv(path):
-    """One prediction per row of a CSV with any of the CSV_COLUMNS (only `age`, and `injury` or
-    `body_part`, are required). Extra `name` / `player` columns are passed through."""
+    """Predict each CSV row (CSV_COLUMNS; `name`/`player` passed through)."""
     b = models()
     raw = pd.read_csv(path)
     unknown = set(raw.columns) - set(CSV_COLUMNS) - {"name", "player"}
@@ -223,7 +210,7 @@ def from_csv(path):
 
 
 def explain(p):
-    """A short plain-language read-out of one prediction from injury()."""
+    """Plain-language summary of an injury() result."""
     return "\n".join([
         f"Read as: {p.injury_type} — {p.body_part}  (rating class '{p.rating_class}', "
         f"{p.severity_tier} of {len(models()['tiered'].tier_names)}, higher = longer)",
@@ -246,13 +233,12 @@ def main():
     p.add_argument("--position", choices=POSITIONS)
     p.add_argument("--body-part", choices=BODY_PARTS)
     p.add_argument("--injury-type", choices=INJURY_TYPES)
-    p.add_argument("--market-value", type=float, help="euros; 0 = no market value (lower leagues)")
-    p.add_argument("--minutes-last-12-months", type=float)
-    p.add_argument("--career-minutes", type=float)
+    p.add_argument("--minutes-last-12-months", type=float, help="career-ending chance only")
+    p.add_argument("--career-minutes", type=float, help="career-ending chance only")
     p.add_argument("--prior-injuries", type=int)
     p.add_argument("--same-body-part-before", action="store_true")
     p.add_argument("--returned-within-60-days", action="store_true", help="hurt again within 60 days of returning")
-    p.add_argument("--date", help="injury date, YYYY-MM-DD (default today)")
+    p.add_argument("--date", help="injury date, YYYY-MM-DD (default today). Career-ending chance only")
     p.add_argument("--csv", help="predict every row of this CSV instead")
     p.add_argument("--out", help="with --csv: write the predictions here")
     p.add_argument("--refit", action="store_true", help="refit and re-save the models")
@@ -274,7 +260,7 @@ def main():
     if a.age is None or not (a.injury or a.body_part):
         p.error("give --age and --injury (or --body-part), or --csv FILE")
     res = injury(a.injury, age=a.age, position=a.position, body_part=a.body_part, injury_type=a.injury_type,
-                 market_value=a.market_value, minutes_last_12_months=a.minutes_last_12_months,
+                 minutes_last_12_months=a.minutes_last_12_months,
                  career_minutes=a.career_minutes, prior_injuries=a.prior_injuries,
                  same_body_part_before=a.same_body_part_before,
                  returned_within_60_days=a.returned_within_60_days, date=a.date)

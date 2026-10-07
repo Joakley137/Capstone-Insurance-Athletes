@@ -10,5 +10,4 @@ jupyterlab
 scipy
 statsmodels
 scikit-learn
-lifelines
 matplotlib
