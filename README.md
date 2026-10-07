@@ -14,9 +14,9 @@ A MySQL database (`sports_injury`) of athlete injuries, contracts and market val
 | [career.py](career.py) | The career-ending model: the chance an injury ends the player's career (logistic regression), compared with the base rate. |
 | [predict.py](predict.py) | Predictions for injuries you describe: expected days out, a likely range and the career-ending chance, for one injury or a whole CSV. |
 | [example_injuries.csv](example_injuries.csv) | Example input for `predict.py --csv`, showing the columns it accepts. |
-| [explore.ipynb](explore.ipynb) | Short notebook that connects to the database and shows a sample of each table. |
-| [severity_models.ipynb](severity_models.ipynb) | The severity model step by step, with charts: data, rating classes, severity tiers, model comparison, relativities and conclusions. |
-| [career_ending_model.ipynb](career_ending_model.ipynb) | The career-ending model step by step: how "career-ending" is defined and checked, comparison with the base rate, calibration, odds ratios and conclusions. |
+| [explore.ipynb](explore.ipynb) | Short notebook with core examples of querying the database through `sportsdb`. |
+| [severity_models.ipynb](severity_models.ipynb) | Fits the tiered gamma GLM on all the data and shows its coefficient table (variable, coef, p-value) and the severity tier to rating classes mapping. |
+| [career_ending_model.ipynb](career_ending_model.ipynb) | Fits the logistic GLM on all the data and shows its coefficient table (variable, coef, p-value). |
 | [requirements.txt](requirements.txt) | Python packages to install (`pip install -r requirements.txt`). |
 | [.gitignore](.gitignore) | Keeps downloaded data (`data/`), the virtual environment and saved model files (`models/`) out of the repository. |
 
@@ -249,12 +249,12 @@ The views are built on top of these tables. `v_injury_summary` totals `injuries`
 
 ## Injury models
 
-Two models price an injury: how long it keeps a player out (**severity**), and whether it ends his career (**career-ending**). **[MODEL_SUMMARY.md](MODEL_SUMMARY.md)** gives the results, the most important predictors and a plain-language explanation for readers new to modeling. Soccer is the only source loaded so far that records how long injuries lasted, so both are fitted on soccer. Each notebook runs the model with plots and explains the results.
+Two models price an injury: how long it keeps a player out (**severity**), and whether it ends his career (**career-ending**). **[MODEL_SUMMARY.md](MODEL_SUMMARY.md)** gives the results, the most important predictors and a plain-language explanation for readers new to modeling. Soccer is the only source loaded so far that records how long injuries lasted, so both are fitted on soccer. Each notebook fits its model on all the data and shows the coefficients; the held-out evaluation comes from `python severity.py` and `python career.py`.
 
 ### Severity: days missed — `severity.py`, `severity_models.ipynb`
 
 ```bash
-python severity.py                 # model comparison and tiered gamma GLM multipliers
+python severity.py                 # held-out comparison and gamma GLM coefficients
 ```
 ```python
 import severity as sev
@@ -263,14 +263,13 @@ train, test = sev.split(data)              # by player, so no player is in both
 models = sev.fit_all(train)
 sev.compare(models, test)                  # log-likelihood, deviance, MAE/RMSE, 90th-percentile check
 glm = models["Gamma GLM, severity tiers"]
-sev.relativities(glm)                      # exp(coef) = multiplier on days
-glm.tier_table(train)                      # the severity tiers and the rating classes in each
-sev.class_table(data)                      # the rating classes with their sizes and average days
+sev.coefficients(glm)                      # variable, coef (log scale), p-value
+glm.tier_of                                # rating class -> severity tier
 ```
 
 - **Rating classes.** Each injury gets a class: body region × injury type (tear / fracture / surgery / ligament / strain / knock…). Combinations with fewer than 300 injuries are pooled, first by injury type ("Fracture - other sites"), then by body region, then into "Other (rare)", so each class is large enough for a credible average.
 - **Severity tiers.** The rating classes are merged into severity tiers: neighbouring classes are merged until every pair of adjacent tiers differs significantly (p < 0.05). The tiers are built on training data only.
-- **Model:** a gamma GLM (log link, main effects only) on severity tier, position, age and age², log(1 + prior injuries), re-injury within 60 days, and same body part injured before. Its relativities are the rating table.
+- **Model:** a gamma GLM (log link, main effects only) on severity tier, position, age and age², log(1 + prior injuries), re-injury within 60 days, and same body part injured before. exp(coef) gives the multiplier on days for each tier.
 - **Baseline:** a gamma model with no predictors, to show how much the predictors add.
 
 ### Career-ending: yes/no — `career.py`, `career_ending_model.ipynb`
@@ -284,14 +283,14 @@ data = career.build_dataset()              # one row per injury, career_ending =
 train, test = career.split(data)
 models = career.fit_all(train)
 career.compare(models, test)               # vs. the base rate: AUC, average precision, log loss, Brier, top-10% capture
-career.odds_ratios(models["Logistic GLM, main effects"])
+career.coefficients(models["Logistic GLM, main effects"])   # variable, coef (log-odds), p-value
 ```
 
 - **Definition:** an injury is career-ending when the player never made another recorded professional appearance after it, and hadn't returned by the end of that season. An injury is only labeled once two complete seasons of data follow it. That leaves 504 career-ending injuries out of 120,682 (0.42%). Of those players, 84% are listed as retired or without a club today.
 - **Model:** a main-effects logistic GLM, compared with the base rate.
 - **Predictors** are only what is known on the day of the injury: body region, injury type, position, age, prior injuries, re-injury, same body part before, minutes in the last 12 months, career minutes and year. How long the injury lasted is not used.
 - **Result:** `career.compare` reports how well the GLM ranks injuries (AUC, and the share of career-ending injuries in its riskiest 10%) against the base rate.
-- **Biggest risk factors:** knee or Achilles injuries, surgery or a tear, age, and little recent playing time. `career.odds_ratios` gives the sizes.
+- **Biggest risk factors:** knee or Achilles injuries, surgery or a tear, age, and little recent playing time. `career.coefficients` gives the sizes.
 
 ### Predicting your own injuries — `predict.py`
 

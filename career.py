@@ -164,26 +164,7 @@ def compare(models, test):
     return out.round(5)
 
 
-def calibration(models, test, bins=10):
-    """Mean predicted vs. actual rate by prediction decile."""
-    rows = []
-    for name, m in models.items():
-        p = m.predict(test)
-        if np.ptp(p) == 0:
-            continue
-        g = pd.DataFrame({"pred": p, "actual": test["career_ending"].to_numpy(),
-                          "decile": pd.qcut(p, bins, labels=False, duplicates="drop")}).groupby("decile")
-        rows.append(g.mean().assign(model=name, n=g.size()))
-    return pd.concat(rows).reset_index()
-
-
-def odds_ratios(model):
-    """Odds ratios with 95% CI."""
-    res = model.res
-    ci = np.exp(res.conf_int())
-    out = pd.DataFrame({"odds_ratio": np.exp(res.params), "ci_low": ci[0], "ci_high": ci[1], "p_value": res.pvalues})
-    out.index = sev.tidy_terms(out.index)
-    return out.round(4)
+coefficients = sev.coefficients
 
 
 def main():
@@ -200,8 +181,8 @@ def main():
     models = fit_all(train)
     print("\nHeld-out comparison:")
     print(compare(models, test).to_string())
-    print("\nLogistic GLM odds ratios:")
-    print(odds_ratios(models["Logistic GLM, main effects"]).to_string())
+    print("\nLogistic GLM coefficients:")
+    print(coefficients(models["Logistic GLM, main effects"]).to_string())
 
 
 if __name__ == "__main__":

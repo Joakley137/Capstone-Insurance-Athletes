@@ -1,7 +1,7 @@
 """
 severity.py — injury severity (days missed): gamma GLM on severity tiers.
 
-    python severity.py                        # fit, print comparison, tiers and relativities
+    python severity.py                        # fit, print held-out comparison and coefficients
 
     import severity as sev
     train, test = sev.split(sev.build_dataset())
@@ -199,14 +199,6 @@ def completed(df):
     return df[~df["censored"]]
 
 
-def class_table(df):
-    """Size and observed days per rating class."""
-    d = completed(df)
-    return (d.groupby("injury_class", observed=True)["days_missed"]
-            .agg(injuries="size", mean_days="mean", median_days="median")
-            .sort_values("mean_days", ascending=False).round(1))
-
-
 # --------------------------------------------------------------------------
 # Model matrix
 # --------------------------------------------------------------------------
@@ -259,7 +251,7 @@ def _gamma_glm(rhs, d):
 # GLM FIT — GammaGLM model class (fits via _gamma_glm, shape by MLE)
 # ==================================================================
 class GammaGLM:
-    """.predict(df) -> expected days; .logpdf/.cdf/.ppf from the fitted gamma."""
+    """.predict(df) -> expected days; .logpdf/.ppf from the fitted gamma."""
 
     def __init__(self, rhs=RHS_CLASS, name="Gamma GLM"):
         self.rhs, self.name = rhs, name
@@ -281,9 +273,6 @@ class GammaGLM:
 
     def logpdf(self, df):
         return self._dist(df).logpdf(df["days_missed"])
-
-    def cdf(self, df):
-        return self._dist(df).cdf(df["days_missed"])
 
     def ppf(self, df, q):
         return self._dist(df).ppf(q)
@@ -388,20 +377,6 @@ class TieredGammaGLM(GammaGLM):
         rq, mu = self._ratio_q(df), self.predict(df)
         return np.array([1 - np.searchsorted(r, days / m, side="right") / len(r) for r, m in zip(rq, mu)])
 
-    def tier_table(self, df):
-        """Per tier: multiplier vs. reference, size, observed days, member classes."""
-        d = self._tiers(completed(df))
-        stats_ = d.groupby("severity_tier", observed=True)["days_missed"].agg(
-            injuries="size", mean_days="mean", median_days="median")
-        rel = relativities(self)
-        prefix = "severity_tier = "
-        stats_["multiplier"] = [1.0 if t == self.ref_tier else rel.loc[prefix + t, "multiplier"] for t in stats_.index]
-        stats_["ci_low"] = [1.0 if t == self.ref_tier else rel.loc[prefix + t, "ci_low"] for t in stats_.index]
-        stats_["ci_high"] = [1.0 if t == self.ref_tier else rel.loc[prefix + t, "ci_high"] for t in stats_.index]
-        members = pd.Series(self.tier_of).groupby(pd.Series(self.tier_of)).apply(lambda s: "; ".join(sorted(s.index)))
-        stats_["classes"] = members.reindex(stats_.index)
-        return stats_.round({"mean_days": 1, "median_days": 1, "multiplier": 3, "ci_low": 3, "ci_high": 3})
-
 
 def default_models():
     return [GammaGLM("1", "Gamma, no predictors"), TieredGammaGLM()]
@@ -441,20 +416,6 @@ def compare(models, test):
     return out.round({"log_lik": 4, "gamma_dev": 4, "mae": 2, "rmse": 2, "mean_pred": 2, "above_p90": 4})
 
 
-def calibration(models, test, bins=10):
-    """Mean predicted vs. actual days by prediction decile."""
-    d = completed(test)
-    rows = []
-    for name, m in models.items():
-        mu = m.predict(d)
-        if np.ptp(mu) == 0:          # constant prediction
-            continue
-        dec = pd.qcut(mu, bins, labels=False, duplicates="drop")
-        g = pd.DataFrame({"pred": mu, "actual": d["days_missed"].to_numpy(), "decile": dec}).groupby("decile")
-        rows.append(g.mean().assign(model=name, n=g.size()))
-    return pd.concat(rows).reset_index()
-
-
 def tidy_terms(index):
     """Readable coefficient names: 'C(region)[T.Knee]' -> 'region = Knee', ':' -> ' x '."""
     return (pd.Index(index)
@@ -463,13 +424,11 @@ def tidy_terms(index):
             .str.replace(":", " x ", regex=False))
 
 
-def relativities(model):
-    """exp(coef) multipliers with 95% CI."""
+def coefficients(model):
+    """Fitted GLM coefficients (link scale) and p-values, with readable term names."""
     res = model.res
-    ci = np.exp(res.conf_int())
-    out = pd.DataFrame({"multiplier": np.exp(res.params), "ci_low": ci[0], "ci_high": ci[1],
-                        "p_value": res.pvalues})
-    out.index = tidy_terms(out.index)
+    out = pd.DataFrame({"coef": res.params, "p_value": res.pvalues})
+    out.index = tidy_terms(out.index).rename("variable")
     return out.round(4)
 
 
@@ -488,10 +447,8 @@ def main():
     tiered = models["Gamma GLM, severity tiers"]
     print("\nHeld-out comparison (completed test injuries):")
     print(compare(models, test).to_string())
-    print(f"\nSeverity tiers ({len(tiered.tier_names)}, train):")
-    print(tiered.tier_table(train).to_string())
-    print("\nGamma GLM (severity tiers) relativities:")
-    print(relativities(tiered).to_string())
+    print(f"\nGamma GLM ({len(tiered.tier_names)} severity tiers) coefficients:")
+    print(coefficients(tiered).to_string())
 
 if __name__ == "__main__":
     main()

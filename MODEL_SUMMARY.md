@@ -73,7 +73,7 @@ Career-ending rate: 504 of 120,682 injuries (0.42%, about 1 in 240).
 
 ## Severity tiers (pricing table)
 
-Each tier differs significantly from its neighbours. Full mapping: `severity_models.ipynb`, section 6.
+Each tier differs significantly from its neighbours. Full mapping: `severity_models.ipynb`, Severity tiers.
 
 | Tier | Multiplier vs. Tier 8 | Median days | Examples |
 |---|---|---|---|
@@ -131,4 +131,4 @@ Each tier differs significantly from its neighbours. Full mapping: `severity_mod
 
 ---
 
-*Details: `severity_models.ipynb`, `career_ending_model.ipynb`. Code: `severity.py`, `career.py`, `predict.py`.*
+*Held-out metrics: `python severity.py`, `python career.py`. Coefficients on all data: `severity_models.ipynb`, `career_ending_model.ipynb`. Code: `severity.py`, `career.py`, `predict.py`.*
