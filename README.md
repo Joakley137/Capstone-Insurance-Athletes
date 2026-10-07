@@ -1,6 +1,6 @@
-# Sports Injury & Contract Database
+# Soccer Injury Database
 
-A MySQL database (`sports_injury`) of athlete injuries, contracts and market values, plus models that predict how long an injury keeps a player out and whether it ends his career. Results in plain language: **[MODEL_SUMMARY.md](MODEL_SUMMARY.md)**.
+A MySQL database (`sports_injury`) of professional soccer injuries, player profiles and playing time (Transfermarkt, via [salimt/football-datasets](https://github.com/salimt/football-datasets)), plus models that predict how long an injury keeps a player out and whether it ends his career. Results in plain language: **[MODEL_SUMMARY.md](MODEL_SUMMARY.md)**.
 
 ## Files
 
@@ -8,8 +8,8 @@ A MySQL database (`sports_injury`) of athlete injuries, contracts and market val
 |---|---|
 | [README.md](README.md) | This page: setup, loading the data, the database schema, the models and how to run them. |
 | [MODEL_SUMMARY.md](MODEL_SUMMARY.md) | The model results and most important predictors, with a plain-language explanation for readers new to modeling. |
-| [build_db.py](build_db.py) | Creates the database tables and loads each data source you download (NBA, NFL, soccer, MLB, ESPN, any CSV). It doesn't download anything on its own. |
-| [sportsdb.py](sportsdb.py) | Pulls data back out of the database as pandas tables: `sdb.injuries(...)`, `sdb.contracts(...)`, `sdb.players(...)` and so on. |
+| [build_db.py](build_db.py) | Creates the database tables and loads the soccer injuries, player profiles and appearances from the downloaded repo. It doesn't download anything on its own. |
+| [sportsdb.py](sportsdb.py) | Pulls data back out of the database as pandas tables: `sdb.injuries(...)`, `sdb.players(...)`, `sdb.player_seasons(...)` and so on. |
 | [severity.py](severity.py) | The severity model: how many days an injury keeps a player out. Builds the modeling table, the rating classes and severity tiers, and fits the tiered gamma GLM against a no-predictor baseline. |
 | [career.py](career.py) | The career-ending model: the chance an injury ends the player's career (logistic regression), compared with the base rate. |
 | [predict.py](predict.py) | Predictions for injuries you describe: expected days out, a likely range and the career-ending chance, for one injury or a whole CSV. |
@@ -20,7 +20,7 @@ A MySQL database (`sports_injury`) of athlete injuries, contracts and market val
 | [requirements.txt](requirements.txt) | Python packages to install (`pip install -r requirements.txt`). |
 | [.gitignore](.gitignore) | Keeps downloaded data (`data/`), the virtual environment and saved model files (`models/`) out of the repository. |
 
-`python build_db.py init` creates the tables, the 14-source registry and the insurance case studies; the injury and contract tables are empty until you run the loaders.
+`python build_db.py init` creates the tables, the view and the source registry; the data tables are empty until you run the loader. A dump of the earlier multi-sport database (NBA/NFL/MLB, contracts, market values) is kept at `data/sports_injury_backup_2026-10-07.sql.gz` (not committed).
 
 ## Setup
 
@@ -40,19 +40,13 @@ Both scripts connect to `mysql+pymysql://root@localhost/sports_injury` by defaul
 
 ## Load the data (run from this folder)
 
-| Source | Get it | Load it |
-|---|---|---|
-| NBA injuries 2010-20 (Kaggle) | `kaggle datasets download -d ghopkins/nba-injuries-2010-2018 -p data/nba_inj --unzip` | `python build_db.py nba-injuries data/nba_inj/<file>.csv` |
-| NBA salaries 2003-19 (Kaggle) | `kaggle datasets download -d josejatem/nba-salaries-20032019 -p data/nba_sal --unzip` | `python build_db.py nba-salaries data/nba_sal/<file>.csv` |
-| NFL injuries + contracts | (downloaded by nflreadpy) | `python build_db.py nfl --seasons 2012-2025` |
-| Soccer (salimt) | `git clone https://github.com/salimt/football-datasets data/football-datasets`, then `cd data/football-datasets && git lfs pull` (needs `brew install git-lfs`; the appearances file is stored with Git LFS) | `python build_db.py soccer data/football-datasets` (injuries, market values, player profiles, appearances) |
-| Soccer player profiles only | (same repo) | `python build_db.py soccer-players data/football-datasets` — birth dates, height, position, current club |
-| Soccer appearances only | (same repo) | `python build_db.py soccer-seasons data/football-datasets` — appearances and minutes per season |
-| MLB (FanGraphs) | Export the injury report as CSV, one per season | `python build_db.py mlb-fangraphs data/fg_2023.csv --season 2023` |
-| NBA live (ESPN) | (scraped) | `python build_db.py espn-nba` — run regularly to build a history |
-| NCAA ISP, Covers, anything else | Your CSV | `python build_db.py import-csv FILE --source-id 3 --table injuries --sport Multi-sport --level College --map "Their Column=injury_date,Other=body_part"` |
+```bash
+git clone https://github.com/salimt/football-datasets data/football-datasets
+cd data/football-datasets && git lfs pull && cd -    # appearances file is stored with Git LFS (brew install git-lfs)
+python build_db.py soccer data/football-datasets     # injuries, player profiles, appearances
+```
 
-Kaggle downloads need an API token (`~/.kaggle/kaggle.json`, from your Kaggle account settings). Re-running any loader replaces that source's rows, so reloading is safe.
+`python build_db.py soccer-players data/football-datasets` and `soccer-seasons data/football-datasets` reload just the profiles or just the appearances and minutes. Re-running any loader replaces its rows, so reloading is safe.
 
 ## Pull data in Python
 
@@ -60,37 +54,29 @@ Kaggle downloads need an API token (`~/.kaggle/kaggle.json`, from your Kaggle ac
 import sportsdb as sdb
 
 sdb.tables()                                  # what's loaded
-nba = sdb.injuries(sport="NBA", seasons=["2016-17", "2017-18"])
+recent = sdb.injuries(seasons=["22/23", "23/24"])
 knees = sdb.injuries(body_part="Knee")
-nfl_big = sdb.contracts(sport="NFL", min_apy=30_000_000)
-model_df = sdb.contracts_with_injuries(sport="NFL")   # contracts + career injury totals
-sdb.body_part_rates()                         # frequency and avg days missed by body part
-ages = sdb.injuries_with_age(sport="Soccer")  # injuries + age_at_injury, position_group, height_cm
+ages = sdb.injuries_with_age()                # injuries + age_at_injury, position_group, height_cm
 sdb.players(player="messi")                   # player profiles
 sdb.player_seasons(player_id="28003")         # appearances and minutes by season (Transfermarkt id)
-sdb.insurance_cases()
+sdb.sources()
 
-sdb.query("SELECT team, COUNT(*) n FROM injuries WHERE sport='NBA' GROUP BY team ORDER BY n DESC")
-sdb.query("SELECT * FROM injuries WHERE team = :team", {"team": "Lakers"})   # :named parameters
+sdb.query("SELECT body_part, COUNT(*) n, AVG(days_missed) avg_days FROM injuries GROUP BY body_part ORDER BY n DESC")
+sdb.query("SELECT * FROM injuries WHERE season = :season", {"season": "23/24"})   # :named parameters
 ```
 
 ## Schema
 
-Solid lines are foreign keys. Dotted lines are joins the views and `sportsdb.py` use but the database doesn't enforce: on `player_key` + `sport`, or for `players` and `player_seasons` on `ext_player_id` + `sport`.
+Solid lines are foreign keys. Dotted lines are joins the view and `sportsdb.py` use but the database doesn't enforce, on `ext_player_id` + `sport`.
 
 ```mermaid
 erDiagram
     sources ||--o{ injuries : "source_id"
-    sources ||--o{ contracts : "source_id"
-    sources ||--o{ market_values : "source_id"
     sources ||--o{ players : "source_id"
-    sources ||..o{ load_log : "source_id"
     sources ||--o{ player_seasons : "source_id"
+    sources ||..o{ load_log : "source_id"
     players ||..o{ injuries : "ext_player_id + sport"
     players ||..o{ player_seasons : "ext_player_id + sport"
-    contracts }o..o{ injuries : "player_key + sport"
-    contracts }o..o{ market_values : "player_key + sport"
-    insurance_cases }o..o{ contracts : "player_key + sport"
 
     sources {
         INT source_id PK
@@ -113,7 +99,7 @@ erDiagram
     injuries {
         INT injury_id PK
         INT source_id FK
-        VARCHAR record_type "event / weekly_report / snapshot"
+        VARCHAR record_type "event"
         VARCHAR sport
         VARCHAR league
         VARCHAR level
@@ -121,7 +107,7 @@ erDiagram
         INT week
         VARCHAR player_name
         VARCHAR player_key "normalized name"
-        VARCHAR ext_player_id
+        VARCHAR ext_player_id "Transfermarkt id"
         VARCHAR team
         VARCHAR position
         DATE injury_date
@@ -135,48 +121,13 @@ erDiagram
         DATETIME loaded_at
     }
 
-    contracts {
-        INT contract_id PK
-        INT source_id FK
-        VARCHAR sport
-        VARCHAR league
-        VARCHAR level
-        VARCHAR player_name
-        VARCHAR player_key
-        VARCHAR ext_player_id
-        VARCHAR team
-        VARCHAR position
-        VARCHAR season "per-season salary rows"
-        INT year_signed "whole-contract rows"
-        INT years
-        DOUBLE total_value "USD"
-        DOUBLE apy "USD"
-        DOUBLE guaranteed "USD"
-        DOUBLE salary "USD"
-        DATETIME loaded_at
-    }
-
-    market_values {
-        INT mv_id PK
-        INT source_id FK
-        VARCHAR sport
-        VARCHAR league
-        VARCHAR player_name
-        VARCHAR player_key
-        VARCHAR ext_player_id
-        DATE value_date
-        DOUBLE market_value
-        VARCHAR currency
-        DATETIME loaded_at
-    }
-
     players {
         INT player_id PK
         INT source_id FK
         VARCHAR sport
         VARCHAR player_name
         VARCHAR player_key
-        VARCHAR ext_player_id "source's player id"
+        VARCHAR ext_player_id "Transfermarkt id"
         DATE date_of_birth
         DOUBLE height_cm
         VARCHAR foot
@@ -208,22 +159,6 @@ erDiagram
         DATETIME loaded_at
     }
 
-    insurance_cases {
-        INT case_id PK
-        VARCHAR player_name
-        VARCHAR player_key
-        VARCHAR sport
-        VARCHAR team
-        DOUBLE contract_total
-        DOUBLE guaranteed
-        TEXT injury
-        VARCHAR seasons_affected
-        INT games_missed
-        DOUBLE reported_payout
-        VARCHAR source_ids
-        TEXT notes
-    }
-
     load_log {
         INT source_id
         VARCHAR target
@@ -233,23 +168,18 @@ erDiagram
     }
 ```
 
-The views are built on top of these tables. `v_injury_summary` totals `injuries` per player and season. `v_contracts_with_injuries` adds each player's career totals from that summary to every `contracts` row. `v_injuries_with_age` adds the player's `age_at_injury`, position group and height to every injury. Every loader also saves its source file untouched in a `raw_<name>` table (e.g. `raw_nfl_injuries`). Those tables aren't in the diagram because their columns are whatever the source file has.
-
 ## Tables
 
-- **injuries** — every sport in one shape. `record_type` tells you what a row is: `event` (one injury with start/return dates), `weekly_report` (NFL weekly status line), or `snapshot` (a live-page reading on a given date).
-- **contracts** — whole contracts (NFL: value, APY, guaranteed) and per-season salaries (NBA). All amounts are full US dollars.
-- **market_values** — soccer market values (EUR).
-- **players** — player profiles: birth date, height, foot, position, current club, date of death (soccer, from Transfermarkt). Joins to `injuries` on `ext_player_id` + `sport`.
-- **player_seasons** — appearances, substitutions, goals and minutes per player, season and competition (soccer). Used for playing time before an injury, and to tell whether a player ever played again.
-- **insurance_cases** — Watson plus blank rows for Rodgers, Tua, Goff, Burrow, McCaffrey to fill in.
-- **sources** — the registry; `status` flips to `Collected` when a loader runs.
-- **raw_*** — each source exactly as downloaded, in case the normalized version drops something you need.
-- **v_injury_summary**, **v_contracts_with_injuries**, **v_injuries_with_age** — ready-made views for modeling.
+- **injuries** — one row per injury (`record_type = 'event'`): dates, days and games missed, description and a keyword-matched `body_part`.
+- **players** — player profiles: birth date, height, foot, position, current club, date of death. Joins to `injuries` on `ext_player_id` + `sport`.
+- **player_seasons** — appearances, substitutions, goals and minutes per player, season and competition. Used for playing time before an injury, and to tell whether a player ever played again.
+- **sources** — the source registry; `status` flips to `Collected` when the loader runs.
+- **load_log** — one row per load: target table, row count, file, time.
+- **v_injuries_with_age** — every injury plus the player's `age_at_injury`, `position_group` and `height_cm`; the models start from this view.
 
 ## Injury models
 
-Two models price an injury: how long it keeps a player out (**severity**), and whether it ends his career (**career-ending**). **[MODEL_SUMMARY.md](MODEL_SUMMARY.md)** gives the results, the most important predictors and a plain-language explanation for readers new to modeling. Soccer is the only source loaded so far that records how long injuries lasted, so both are fitted on soccer. Each notebook fits its model on all the data and shows the coefficients; the held-out evaluation comes from `python severity.py` and `python career.py`.
+Two models price an injury: how long it keeps a player out (**severity**), and whether it ends his career (**career-ending**). **[MODEL_SUMMARY.md](MODEL_SUMMARY.md)** gives the results, the most important predictors and a plain-language explanation for readers new to modeling. Each notebook fits its model on all the data and shows the coefficients; the held-out evaluation comes from `python severity.py` and `python career.py`.
 
 ### Severity: days missed — `severity.py`, `severity_models.ipynb`
 
@@ -319,10 +249,8 @@ Filled in with typical values: nothing
 
 ## Things to know
 
-- `injury_date`, `snapshot_date` and `value_date` are real MySQL `DATE` columns, so they come back as Python dates (use `pd.to_datetime(df.injury_date)` for date math). `return_date` stays text because ESPN gives values like "Oct 22".
-- `player_key` is a normalized name (lowercase, no punctuation or Jr./III) used to join across sources. Name matching isn't perfect; spot-check joins for common names.
+- `injury_date` is a real MySQL `DATE` column, so it comes back as Python dates (use `pd.to_datetime(df.injury_date)` for date math). `return_date` is stored as ISO text.
+- Join `injuries`, `players` and `player_seasons` on `ext_player_id` (the Transfermarkt id), not on names. `player_key` is a normalized name (lowercase, no punctuation) kept for searching.
 - `body_part` is guessed from the injury description by keyword. Check it before relying on it.
 - Transfermarkt's `minutes_played` column in `player_performances.csv` is actually **minutes per goal** (blank when the player didn't score). The loader turns it into real minutes (minutes per goal × goals) and, for seasons with no goals, estimates minutes from appearances: 90 per full game, 73.5 when subbed off, 18.5 when subbed on. On seasons where minutes are known, that estimate is within 3% (median). `minutes_estimated` marks which is which. The 25/26 season was only partly downloaded.
-- NBA salary seasons are single years (`2012`) while NBA injury seasons are `2011-12`; the provided views join on player, not season.
-- Column names in the Kaggle, soccer, and FanGraphs files were matched flexibly, but these loaders were tested on sample files, not the real downloads. If one fails, the error lists the columns it found so you can adjust the `pick(...)` names.
-- The ESPN scraper depends on ESPN's page layout and may need updating if it changes.
+- Column names in the soccer files were matched flexibly. If a loader fails, the error lists the columns it found so you can adjust the `pick(...)` names.

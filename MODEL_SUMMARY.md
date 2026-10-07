@@ -4,7 +4,7 @@ Two GLMs price injury risk for an athlete:
 1. **Severity**: days missed (gamma GLM)
 2. **Career-ending**: probability the injury ends the career (logistic GLM)
 
-Data: professional soccer, 163,414 injuries to 34,429 players (Transfermarkt), the only source in the database with injury durations. Models are trained on 80% of players and tested on the other 20%; all of a player's injuries stay on one side. Each GLM is checked against a no-predictor baseline.
+Data: professional soccer, 163,414 injuries to 34,429 players (Transfermarkt). Models are trained on 80% of players and tested on the other 20%; all of a player's injuries stay on one side. Each GLM is checked against a no-predictor baseline.
 
 ---
 
@@ -124,7 +124,7 @@ Each tier differs significantly from its neighbours. Full mapping: `severity_mod
 
 ## Limitations
 
-- **Soccer only**: other sports lack durations.
+- **Soccer only**: fitted on professional soccer; results may not carry over to other sports.
 - **Patterns, not causes**: e.g. more recorded injuries go with *shorter* ones, likely reporting differences across leagues.
 - **Career-ending is inferred** from appearances; dropping to amateur football counts.
 - **Body part is keyword-matched**; 18% are "unknown injury".

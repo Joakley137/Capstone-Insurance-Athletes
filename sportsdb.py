@@ -2,12 +2,12 @@
 sportsdb.py — pull data from the sports_injury MySQL database into pandas.
 
     import sportsdb as sdb
-    inj  = sdb.injuries(sport="NBA", seasons=["2015-16", "2016-17"])
-    pay  = sdb.contracts(sport="NFL", min_apy=20_000_000)
-    both = sdb.contracts_with_injuries(sport="NFL")
+    inj  = sdb.injuries(sport="Soccer", body_part="knee")
+    ppl  = sdb.players(player="messi")
+    apps = sdb.player_seasons(sport="Soccer")         # appearances and minutes per season
     ages = sdb.injuries_with_age(sport="Soccer")      # + age_at_injury, position_group
     df   = sdb.query("SELECT body_part, COUNT(*) n FROM injuries GROUP BY 1 ORDER BY n DESC")
-    df   = sdb.query("SELECT * FROM injuries WHERE team = :team", {"team": "Lakers"})
+    df   = sdb.query("SELECT * FROM injuries WHERE team = :team", {"team": "Arsenal"})
 
 Connects to $SPORTS_DB_URL (default mysql+pymysql://root@localhost/sports_injury).
 """
@@ -73,23 +73,6 @@ def injuries(sport=None, league=None, level=None, seasons=None, player=None, bod
     return query(f"SELECT * FROM injuries{w} ORDER BY sport, injury_date", p)
 
 
-def contracts(sport=None, league=None, seasons=None, player=None, min_apy=None, source_id=None):
-    """Contract / salary rows. Amounts are full US dollars."""
-    w, p = _where(sport=sport, league=league, season=seasons, apy__min=min_apy, source_id=source_id)
-    if player:
-        w += (" AND " if w else " WHERE ") + "player_key LIKE :player"
-        p["player"] = f"%{player.lower()}%"
-    return query(f"SELECT * FROM contracts{w}", p)
-
-
-def market_values(sport=None, player=None):
-    w, p = _where(sport=sport)
-    if player:
-        w += (" AND " if w else " WHERE ") + "player_key LIKE :player"
-        p["player"] = f"%{player.lower()}%"
-    return query(f"SELECT * FROM market_values{w} ORDER BY player_key, value_date", p)
-
-
 def players(sport=None, player=None):
     """Player profiles: birth date, height, foot, position."""
     w, p = _where(sport=sport)
@@ -110,23 +93,6 @@ def injuries_with_age(sport=None, seasons=None, body_part=None, record_type=None
     """Injury rows plus the player's age on the injury date, position group and height."""
     w, p = _where(sport=sport, season=seasons, body_part=body_part, record_type=record_type)
     return query(f"SELECT * FROM v_injuries_with_age{w} ORDER BY sport, injury_date", p)
-
-
-def injury_summary(sport=None, seasons=None):
-    """One row per player per season: injury events, weeks out, days and games missed."""
-    w, p = _where(sport=sport, season=seasons)
-    return query(f"SELECT * FROM v_injury_summary{w}", p)
-
-
-def contracts_with_injuries(sport=None):
-    """Every contract/salary row with that player's career injury totals attached —
-    the starting table for relating injury history to contract value."""
-    w, p = _where(sport=sport)
-    return query(f"SELECT * FROM v_contracts_with_injuries{w}", p)
-
-
-def insurance_cases():
-    return query("SELECT * FROM insurance_cases")
 
 
 def body_part_rates(sport=None):

@@ -41,7 +41,6 @@ REGIONS = {"Quadriceps": "Thigh", "Back": "Back / neck", "Neck": "Back / neck", 
 
 MIN_CLASS_N = 300            # min injuries for a region x type cell to be its own class
 REF_CLASS = "Hamstring (unspecified)"
-LOG_MV_CENTER = np.log(500_000)
 
 CATEGORICAL = ["body_part", "region", "nature", "injury_class", "position_group"]
 
@@ -113,17 +112,6 @@ def injury_features(sport="Soccer", as_of=None):
     df["prior_same_part"] = (df["body_part"].notna()
                              & (df.groupby(["pid", "body_part"]).cumcount() > 0)).astype(int)
 
-    # Market value: latest valuation within 2 years before injury
-    mv = sdb.query("""SELECT ext_player_id, value_date, market_value FROM market_values
-                      WHERE sport = :sport AND market_value > 0 AND value_date IS NOT NULL""", {"sport": sport})
-    df["log_mv"] = np.nan
-    if not mv.empty:
-        mv["value_date"] = pd.to_datetime(mv["value_date"])
-        left = df[["_row", "ext_player_id", "injury_date"]].dropna().sort_values("injury_date")
-        hit = pd.merge_asof(left, mv.sort_values("value_date"), left_on="injury_date", right_on="value_date",
-                            by="ext_player_id", direction="backward", tolerance=pd.to_timedelta(730, unit="D"))
-        df["log_mv"] = df["_row"].map(np.log(hit.set_index("_row")["market_value"]))
-
     # Playing time: only seasons ended before the injury (avoids leakage)
     ps = player_seasons(sport)
     df["games_12m"] = df["career_games"] = 0.0
@@ -147,8 +135,6 @@ def injury_features(sport="Soccer", as_of=None):
     # Centered for the formula models
     df["age_c"] = df["age"] - 26
     df["year_c"] = df["year"] - 2015
-    df["mv_missing"] = df["log_mv"].isna().astype(int)
-    df["log_mv_c"] = (df["log_mv"] - LOG_MV_CENTER).fillna(0)
     df["no_games_12m"] = (df["games_12m"] <= 0).astype(int)
     for pos in ["Attack", "Defender", "Goalkeeper"]:
         df[f"pos_{pos.lower()}"] = (df["position_group"] == pos).astype(int)
