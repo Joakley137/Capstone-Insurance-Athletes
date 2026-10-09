@@ -162,6 +162,7 @@ CREATE TABLE IF NOT EXISTS player_seasons (
     season_start      DATE,
     season_end        DATE,
     competition       VARCHAR(255),
+    competition_id    VARCHAR(20),     -- the source's league code, e.g. GB1, ES1, IT1, L1, FR1 (names repeat across countries)
     team              VARCHAR(255),
     squad_selections  INT,             -- times named in the matchday squad
     appearances       INT,
@@ -290,8 +291,8 @@ MV_COLS = ["source_id", "sport", "league", "player_name", "player_key", "ext_pla
            "market_value", "currency", "loaded_at"]
 PLAYER_COLS = ["source_id", "sport", "player_name", "player_key", "ext_player_id", "date_of_birth", "height_cm",
                "foot", "position", "position_group", "citizenship", "current_club", "date_of_death", "loaded_at"]
-SEASON_COLS = ["source_id", "sport", "ext_player_id", "season", "season_start", "season_end", "competition", "team",
-               "squad_selections", "appearances", "subbed_in", "subbed_out", "goals", "minutes", "minutes_estimated",
+SEASON_COLS = ["source_id", "sport", "ext_player_id", "season", "season_start", "season_end", "competition", "competition_id",
+               "team", "squad_selections", "appearances", "subbed_in", "subbed_out", "goals", "minutes", "minutes_estimated",
                "loaded_at"]
 TABLE_COLS = {"injuries": INJURY_COLS, "contracts": CONTRACT_COLS, "market_values": MV_COLS, "players": PLAYER_COLS,
               "player_seasons": SEASON_COLS}
@@ -564,7 +565,7 @@ def cmd_soccer(args):
     CSVs anywhere in the repo folder by file name."""
     files = glob.glob(os.path.join(args.repo, "**", "*.csv"), recursive=True)
     find = lambda *words: [f for f in files if all(w in os.path.basename(f).lower() for w in words)]
-    inj_files, mv_files = find("injur"), find("market", "value")
+    inj_files, mv_files = sorted(find("injur")), find("market", "value")   # sorted: an "_updated" file comes after the original
     prof_files = find("profile")
     perf_files = [f for f in files if os.path.basename(f).lower().startswith("player_performances")]
     if not inj_files and not mv_files:
@@ -593,6 +594,10 @@ def cmd_soccer(args):
         load_soccer_seasons(con, perf_files[0])
     if inj_files:
         raw = pd.concat([pd.read_csv(f, low_memory=False) for f in inj_files], ignore_index=True)
+        # The repo ships an updated injury file that repeats most of the original's rows; keep one copy of
+        # each injury (the last, i.e. the updated one) or every count of earlier injuries is inflated.
+        key = [c for c in ("player_id", "from_date", "injury_reason") if c in raw.columns]
+        raw = raw.drop_duplicates(subset=key, keep="last").reset_index(drop=True) if key else raw.drop_duplicates()
         pid, nm = attach_names(raw)
         desc = col(raw, "injury_reason", "injury", "reason", "injury_type")
         out = pd.DataFrame({
@@ -673,11 +678,17 @@ def load_soccer_seasons(con, path):
     out = pd.DataFrame({
         "sport": "Soccer", "ext_player_id": col(raw, "player_id").astype(str),
         "season": col(raw, "season_name", "season"), "season_start": start, "season_end": end,
-        "competition": col(raw, "competition_name"), "team": col(raw, "team_name"),
+        "competition": col(raw, "competition_name"), "competition_id": col(raw, "competition_id"),
+        "team": col(raw, "team_name"),
         "squad_selections": num("nb_in_group"), "appearances": apps, "subbed_in": sub_in, "subbed_out": sub_out,
         "goals": goals, "minutes": exact.where(has_exact, estimate).round(),
         "minutes_estimated": (~has_exact).astype(int),
     })
+    with con.begin() as c:        # databases created before competition_id existed need the column added
+        has = run(c, """SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE()
+                        AND table_name = 'player_seasons' AND column_name = 'competition_id'""").scalar()
+        if not has:
+            run(c, "ALTER TABLE player_seasons ADD COLUMN competition_id VARCHAR(20) AFTER competition")
     write(con, "player_seasons", out, 9, raw=raw, raw_name="soccer_player_seasons", file=path)
 
 

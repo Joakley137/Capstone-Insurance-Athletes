@@ -16,12 +16,14 @@ import os
 import pandas as pd
 import sqlalchemy as sa
 
-DB_URL = os.environ.get("SPORTS_DB_URL", "mysql+pymysql://root@localhost/sports_injury")
+DEFAULT_URL = "mysql+pymysql://root@localhost/sports_injury"
+DB_URL = None            # set this to override $SPORTS_DB_URL for the rest of the session
 _engines = {}
 
 
 def connect(url=None):
-    url = url or DB_URL
+    # Read the environment on every call, so setting SPORTS_DB_URL after importing (e.g. in a notebook) works
+    url = url or DB_URL or os.environ.get("SPORTS_DB_URL", DEFAULT_URL)
     if url not in _engines:
         _engines[url] = sa.create_engine(url, pool_pre_ping=True)
     return _engines[url]
