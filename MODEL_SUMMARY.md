@@ -1,10 +1,18 @@
-# Injury Model Summary
+# Injury Model Results
 
 Two GLMs price injury risk for an athlete:
 1. **Severity**: days missed (gamma GLM)
 2. **Career-ending**: probability the injury ends the career (logistic GLM)
 
-Data: professional soccer, 163,414 injuries to 34,429 players (Transfermarkt). Models are trained on 80% of players and tested on the other 20%; all of a player's injuries stay on one side. Each GLM is checked against a no-predictor baseline.
+## Key findings
+
+- **The injury itself drives time out.** Grouping injuries into 16 severity tiers cuts the error in predicted days out by a quarter (33 vs. 44 days, mean absolute error). Achilles and knee tears keep a player out about 4× as long as a typical hamstring injury; illness about a quarter as long.
+- **Career-ending injuries are rare but predictable.** About 1 in 240 injuries ends a career. The model ranks them well (AUC 0.86): the riskiest 10% of injuries contain 55% of the career-ending ones.
+- **Knee and Achilles injuries, surgery, and age raise career-ending risk most.** Knee/Achilles injuries carry about 9–10× the odds of a hamstring injury, surgery or a tear about 3×, and each extra year of age about 1.27×.
+- **Regular players are far less likely to retire after an injury.** More games in the past 12 months sharply lowers the odds.
+- **Example:** a torn ACL means about 160–175 expected days out; the chance it ends the career is about 2% for a 27-year-old regular starter and about 9% for a typical 33-year-old.
+
+Data: Transfermarkt professional soccer injuries, player profiles and playing time (163,414 injuries, 34,429 players). Models are trained on 80% of players and tested on the other 20%; all of a player's injuries stay on one side. Each GLM is checked against a no-predictor baseline.
 
 ---
 
@@ -32,6 +40,8 @@ family = Binomial, link = logit       # coefficients -> exp(coef) odds ratios
 ---
 
 ## Accuracy (test players)
+
+![Model accuracy vs. baseline](figures/model_accuracy.png)
 
 | | Baseline | GLM |
 |---|---|---|
@@ -75,6 +85,8 @@ Career-ending rate: 504 of 120,682 injuries (0.42%, about 1 in 240).
 
 Each tier differs significantly from its neighbours. Full mapping: `severity_models.ipynb`, Severity tiers.
 
+![Severity tier multipliers](figures/severity_tiers.png)
+
 | Tier | Multiplier vs. Tier 8 | Median days | Examples |
 |---|---|---|---|
 | 1 | 0.27 | 8 | Illness |
@@ -95,6 +107,8 @@ Each tier differs significantly from its neighbours. Full mapping: `severity_mod
 | 16 | 4.19 | 192 | Achilles and knee tears |
 
 ## Career-ending drivers (odds ratios)
+
+![Career-ending risk factors](figures/career_risk_factors.png)
 
 | Predictor | Odds ratio |
 |---|---|
@@ -126,9 +140,9 @@ Each tier differs significantly from its neighbours. Full mapping: `severity_mod
 
 - **Soccer only**: fitted on professional soccer; results may not carry over to other sports.
 - **Patterns, not causes**: e.g. more recorded injuries go with *shorter* ones, likely reporting differences across leagues.
-- **Career-ending is inferred** from appearances; dropping to amateur football counts.
+- **Career-ending is inferred** from appearances; a move to amateur football counts.
 - **Body part is keyword-matched**; 18% are "unknown injury".
 
 ---
 
-*Held-out metrics: `python severity.py`, `python career.py`. Coefficients on all data: `severity_models.ipynb`, `career_ending_model.ipynb`. Code: `severity.py`, `career.py`, `predict.py`.*
+*Notebooks: `severity_models.ipynb` (days missed), `career_ending_model.ipynb` (career-ending); coefficients on all data. Code: `severity.py`, `career.py` (held-out metrics: `python severity.py`, `python career.py`), `predict.py` (new injuries).*

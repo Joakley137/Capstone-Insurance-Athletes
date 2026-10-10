@@ -68,8 +68,8 @@ def player_seasons(sport="Soccer"):
     """Minutes and appearances per player-season, all competitions."""
     ps = sdb.query("""SELECT ext_player_id, season_start, season_end,
                              SUM(minutes) AS minutes, SUM(appearances) AS appearances
-                      FROM player_seasons WHERE sport = :sport AND season_end IS NOT NULL
-                      GROUP BY ext_player_id, season_start, season_end""", {"sport": sport})
+                      FROM player_seasons WHERE season_end IS NOT NULL
+                      GROUP BY ext_player_id, season_start, season_end""")
     for c in ["season_start", "season_end"]:
         ps[c] = pd.to_datetime(ps[c])
     return ps
@@ -85,14 +85,13 @@ def _asof(left, right, on_left, on_right, value, by="ext_player_id"):
 
 def injury_features(sport="Soccer", as_of=None):
     """All injury events with predictors, unfiltered. Open injuries: censored=True, days_missed = days so far."""
-    inj = sdb.query("""SELECT injury_id, ext_player_id, player_key, injury_date, return_date, days_missed,
+    inj = sdb.query("""SELECT injury_id, ext_player_id, injury_date, return_date, days_missed,
                               body_part, injury_desc, age_at_injury AS age, position_group
-                       FROM v_injuries_with_age
-                       WHERE sport = :sport AND record_type = 'event'""", {"sport": sport})
+                       FROM v_injuries_with_age ORDER BY injury_id""")
     if inj.empty or inj["days_missed"].notna().sum() == 0:
         raise ValueError(f"No {sport} injury events with days_missed are loaded.")
 
-    df = inj.assign(pid=inj["ext_player_id"].fillna(inj["player_key"]),
+    df = inj.assign(pid=inj["ext_player_id"],
                     injury_date=pd.to_datetime(inj["injury_date"], errors="coerce"),
                     return_date=pd.to_datetime(inj["return_date"], errors="coerce"))
     df = df.dropna(subset=["pid", "injury_date"]).sort_values(["pid", "injury_date"]).reset_index(drop=True)

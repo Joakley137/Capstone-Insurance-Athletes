@@ -60,8 +60,7 @@ def build_dataset(sport="Soccer", follow_up_seasons=FOLLOW_UP_SEASONS):
     end_date = f["pid"].map(f[candidate].groupby("pid")["injury_date"].min())
     f["career_ending"] = (candidate & (f["injury_date"] == end_date)).astype(int)
 
-    players = sdb.query("SELECT ext_player_id, current_club, date_of_death FROM players WHERE sport = :sport",
-                        {"sport": sport})
+    players = sdb.query("SELECT ext_player_id, date_of_death FROM players")
     f = f.merge(players, on="ext_player_id", how="left")
 
     cutoff = last_complete_season_start(ps) - pd.DateOffset(years=follow_up_seasons - 1)

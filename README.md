@@ -1,230 +1,26 @@
-# Soccer Injury Database
+# Soccer Injury Models
 
-A MySQL database (`sports_injury`) of professional soccer injuries, player profiles and playing time (Transfermarkt, via [salimt/football-datasets](https://github.com/salimt/football-datasets)), plus models that predict how long an injury keeps a player out and whether it ends his career. Results in plain language: **[MODEL_SUMMARY.md](MODEL_SUMMARY.md)**.
+Two GLMs that price a professional soccer injury: how many days it keeps the player out (gamma GLM), and the chance it ends their career (logistic GLM). Fitted on 163,414 injuries to 34,429 players from Transfermarkt, and tested on players held out of training.
 
-## Files
+## Headline results
 
-| File | What it is |
-|---|---|
-| [README.md](README.md) | This page: setup, loading the data, the database schema, the models and how to run them. |
-| [MODEL_SUMMARY.md](MODEL_SUMMARY.md) | The model results and most important predictors, with a plain-language explanation for readers new to modeling. |
-| [build_db.py](build_db.py) | Creates the database tables and loads the soccer injuries, player profiles and appearances from the downloaded repo. It doesn't download anything on its own. |
-| [sportsdb.py](sportsdb.py) | Pulls data back out of the database as pandas tables: `sdb.injuries(...)`, `sdb.players(...)`, `sdb.player_seasons(...)` and so on. |
-| [severity.py](severity.py) | The severity model: how many days an injury keeps a player out. Builds the modeling table, the rating classes and severity tiers, and fits the tiered gamma GLM against a no-predictor baseline. |
-| [career.py](career.py) | The career-ending model: the chance an injury ends the player's career (logistic regression), compared with the base rate. |
-| [predict.py](predict.py) | Predictions for injuries you describe: expected days out, a likely range and the career-ending chance, for one injury or a whole CSV. |
-| [example_injuries.csv](example_injuries.csv) | Example input for `predict.py --csv`, showing the columns it accepts. |
-| [explore.ipynb](explore.ipynb) | Short notebook with core examples of querying the database through `sportsdb`. |
-| [severity_models.ipynb](severity_models.ipynb) | Fits the tiered gamma GLM on all the data and shows its coefficient table (variable, coef, p-value) and the severity tier to rating classes mapping. |
-| [career_ending_model.ipynb](career_ending_model.ipynb) | Fits the logistic GLM on all the data and shows its coefficient table (variable, coef, p-value). |
-| [requirements.txt](requirements.txt) | Python packages to install (`pip install -r requirements.txt`). |
-| [.gitignore](.gitignore) | Keeps downloaded data (`data/`), the virtual environment and saved model files (`models/`) out of the repository. |
+| | Baseline (no predictors) | GLM |
+|---|---|---|
+| Days missed: mean absolute error | 44.0 days | **33.3 days** |
+| Career-ending: AUC | 0.50 | **0.857** |
+| Career-ending: share caught in the riskiest 10% of injuries | 10% | **55%** |
 
-`python build_db.py init` creates the tables, the view and the source registry; the data tables are empty until you run the loader. A dump of the earlier multi-sport database (NBA/NFL/MLB, contracts, market values) is kept at `data/sports_injury_backup_2026-10-07.sql.gz` (not committed).
+- **Injury type drives length.** Severity tiers run from 0.27x the days of a hamstring injury (illness, median 8 days) to 4.19x (Achilles and knee tears, median 192 days).
+- **Career-ending injuries are rare** (504 of 120,682, about 1 in 240), but knee and Achilles injuries carry roughly 9-10x the odds of a hamstring injury, and age and little recent playing time raise the risk further.
 
-## Setup
+![Severity tiers: multiplier on expected days and median days missed](figures/severity_tiers.png)
 
-```bash
-brew install mysql
-brew services start mysql            # runs MySQL in the background, and at login
-mysql -u root -e "CREATE DATABASE sports_injury CHARACTER SET utf8mb4"
+## Where to go next
 
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-python build_db.py init
-```
-
-Both scripts connect to `mysql+pymysql://root@localhost/sports_injury` by default. To use a different server, user or password, set `SPORTS_DB_URL`, e.g. `export SPORTS_DB_URL="mysql+pymysql://user:password@host:3306/sports_injury"`, or pass `--db URL` to `build_db.py`.
-
-**Viewing the data:** any MySQL client works. Free options: [MySQL Workbench](https://dev.mysql.com/downloads/workbench/), [DBeaver Community](https://dbeaver.io/), or the `mysql` command line. Connect to host `localhost`, port `3306`, user `root`, no password.
-
-## Load the data (run from this folder)
-
-```bash
-git clone https://github.com/salimt/football-datasets data/football-datasets
-cd data/football-datasets && git lfs pull && cd -    # appearances file is stored with Git LFS (brew install git-lfs)
-python build_db.py soccer data/football-datasets     # injuries, player profiles, appearances
-```
-
-`python build_db.py soccer-players data/football-datasets` and `soccer-seasons data/football-datasets` reload just the profiles or just the appearances and minutes. Re-running any loader replaces its rows, so reloading is safe.
-
-## Pull data in Python
-
-```python
-import sportsdb as sdb
-
-sdb.tables()                                  # what's loaded
-recent = sdb.injuries(seasons=["22/23", "23/24"])
-knees = sdb.injuries(body_part="Knee")
-ages = sdb.injuries_with_age()                # injuries + age_at_injury, position_group, height_cm
-sdb.players(player="messi")                   # player profiles
-sdb.player_seasons(player_id="28003")         # appearances and minutes by season (Transfermarkt id)
-sdb.sources()
-
-sdb.query("SELECT body_part, COUNT(*) n, AVG(days_missed) avg_days FROM injuries GROUP BY body_part ORDER BY n DESC")
-sdb.query("SELECT * FROM injuries WHERE season = :season", {"season": "23/24"})   # :named parameters
-```
-
-## Schema
-
-Solid lines are foreign keys. Dotted lines are joins the view and `sportsdb.py` use but the database doesn't enforce, on `ext_player_id` + `sport`.
-
-```mermaid
-erDiagram
-    sources ||--o{ injuries : "source_id"
-    sources ||--o{ players : "source_id"
-    sources ||--o{ player_seasons : "source_id"
-    sources ||..o{ load_log : "source_id"
-    players ||..o{ injuries : "ext_player_id + sport"
-    players ||..o{ player_seasons : "ext_player_id + sport"
-
-    sources {
-        INT source_id PK
-        VARCHAR name
-        TEXT url
-        VARCHAR sport
-        VARCHAR level
-        VARCHAR coverage
-        VARCHAR format
-        TINYINT has_injury
-        TINYINT has_contract
-        TINYINT has_insurance
-        TINYINT has_nil
-        TEXT role_in_model
-        TEXT access_notes
-        VARCHAR status "Not started / Collected"
-        TEXT notes
-    }
-
-    injuries {
-        INT injury_id PK
-        INT source_id FK
-        VARCHAR record_type "event"
-        VARCHAR sport
-        VARCHAR league
-        VARCHAR level
-        VARCHAR season
-        INT week
-        VARCHAR player_name
-        VARCHAR player_key "normalized name"
-        VARCHAR ext_player_id "Transfermarkt id"
-        VARCHAR team
-        VARCHAR position
-        DATE injury_date
-        VARCHAR return_date
-        INT days_missed
-        INT games_missed
-        VARCHAR body_part
-        TEXT injury_desc
-        VARCHAR status
-        DATE snapshot_date
-        DATETIME loaded_at
-    }
-
-    players {
-        INT player_id PK
-        INT source_id FK
-        VARCHAR sport
-        VARCHAR player_name
-        VARCHAR player_key
-        VARCHAR ext_player_id "Transfermarkt id"
-        DATE date_of_birth
-        DOUBLE height_cm
-        VARCHAR foot
-        VARCHAR position
-        VARCHAR position_group "Goalkeeper / Defender / Midfield / Attack"
-        VARCHAR citizenship
-        VARCHAR current_club "Retired / Without Club / club"
-        DATE date_of_death
-        DATETIME loaded_at
-    }
-
-    player_seasons {
-        INT ps_id PK
-        INT source_id FK
-        VARCHAR sport
-        VARCHAR ext_player_id
-        VARCHAR season "23/24 or 2023"
-        DATE season_start
-        DATE season_end
-        VARCHAR competition
-        VARCHAR team
-        INT squad_selections
-        INT appearances
-        INT subbed_in
-        INT subbed_out
-        INT goals
-        DOUBLE minutes
-        TINYINT minutes_estimated
-        DATETIME loaded_at
-    }
-
-    load_log {
-        INT source_id
-        VARCHAR target
-        INT rows
-        TEXT file
-        DATETIME loaded_at
-    }
-```
-
-## Tables
-
-- **injuries** — one row per injury (`record_type = 'event'`): dates, days and games missed, description and a keyword-matched `body_part`.
-- **players** — player profiles: birth date, height, foot, position, current club, date of death. Joins to `injuries` on `ext_player_id` + `sport`.
-- **player_seasons** — appearances, substitutions, goals and minutes per player, season and competition. Used for playing time before an injury, and to tell whether a player ever played again.
-- **sources** — the source registry; `status` flips to `Collected` when the loader runs.
-- **load_log** — one row per load: target table, row count, file, time.
-- **v_injuries_with_age** — every injury plus the player's `age_at_injury`, `position_group` and `height_cm`; the models start from this view.
-
-## Injury models
-
-Two models price an injury: how long it keeps a player out (**severity**), and whether it ends his career (**career-ending**). **[MODEL_SUMMARY.md](MODEL_SUMMARY.md)** gives the results, the most important predictors and a plain-language explanation for readers new to modeling. Each notebook fits its model on all the data and shows the coefficients; the held-out evaluation comes from `python severity.py` and `python career.py`.
-
-### Severity: days missed — `severity.py`, `severity_models.ipynb`
-
-```bash
-python severity.py                 # held-out comparison and gamma GLM coefficients
-```
-```python
-import severity as sev
-data = sev.build_dataset()                 # one row per injury, with predictors and a rating class
-train, test = sev.split(data)              # by player, so no player is in both
-models = sev.fit_all(train)
-sev.compare(models, test)                  # log-likelihood, deviance, MAE/RMSE, 90th-percentile check
-glm = models["Gamma GLM, severity tiers"]
-sev.coefficients(glm)                      # variable, coef (log scale), p-value
-glm.tier_of                                # rating class -> severity tier
-```
-
-- **Rating classes.** Each injury gets a class: body region × injury type (tear / fracture / surgery / ligament / strain / knock…). Combinations with fewer than 300 injuries are pooled, first by injury type ("Fracture - other sites"), then by body region, then into "Other (rare)", so each class is large enough for a credible average.
-- **Severity tiers.** The rating classes are merged into severity tiers: neighbouring classes are merged until every pair of adjacent tiers differs significantly (p < 0.05). The tiers are built on training data only.
-- **Model:** a gamma GLM (log link, main effects only) on severity tier, position, age and age², log(1 + prior injuries), re-injury within 60 days, and same body part injured before. exp(coef) gives the multiplier on days for each tier.
-- **Baseline:** a gamma model with no predictors, to show how much the predictors add.
-
-### Career-ending: yes/no — `career.py`, `career_ending_model.ipynb`
-
-```bash
-python career.py
-```
-```python
-import career
-data = career.build_dataset()              # one row per injury, career_ending = 0/1
-train, test = career.split(data)
-models = career.fit_all(train)
-career.compare(models, test)               # vs. the base rate: AUC, average precision, log loss, Brier, top-10% capture
-career.coefficients(models["Logistic GLM, main effects"])   # variable, coef (log-odds), p-value
-```
-
-- **Definition:** an injury is career-ending when the player never made another recorded professional appearance after it, and hadn't returned by the end of that season. An injury is only labeled once two complete seasons of data follow it. That leaves 504 career-ending injuries out of 120,682 (0.42%). Of those players, 84% are listed as retired or without a club today.
-- **Model:** a main-effects logistic GLM, compared with the base rate.
-- **Predictors** are only what is known on the day of the injury: body region, injury type, position, age, prior injuries, re-injury, same body part before, minutes in the last 12 months, career minutes and year. How long the injury lasted is not used.
-- **Result:** `career.compare` reports how well the GLM ranks injuries (AUC, and the share of career-ending injuries in its riskiest 10%) against the base rate.
-- **Biggest risk factors:** knee or Achilles injuries, surgery or a tear, age, and little recent playing time. `career.coefficients` gives the sizes.
-
-### Predicting your own injuries — `predict.py`
-
-Describe an injury and get expected days out, a realistic range and the chance it ends the player's career:
+- **[MODEL_SUMMARY.md](MODEL_SUMMARY.md)**: full results, the severity tier pricing table, all drivers and a plain-language explanation.
+- **[severity_models.ipynb](severity_models.ipynb)**: the gamma GLM coefficients (variable, coef, p-value) and which injuries fall in each severity tier.
+- **[career_ending_model.ipynb](career_ending_model.ipynb)**: the logistic GLM coefficients (variable, coef, p-value).
+- **[predict.py](predict.py)**: describe an injury and get a prediction.
 
 ```bash
 python predict.py --injury "Cruciate ligament tear" --age 27 --position Defender \
@@ -239,18 +35,77 @@ Chance this injury ends the career: 2.03%  (average injury: about 0.42%)
 Filled in with typical values: nothing
 ```
 
-- **Many injuries at once:** `python predict.py --csv example_injuries.csv --out predictions.csv`. `example_injuries.csv` shows the columns; only `age` and `injury` are required.
-- **From Python:** `predict.injury("Broken foot", age=30, position="Midfield")` returns the same numbers as a Series.
-- **Describing the injury:** use words, the way Transfermarkt does ("Hamstring strain", "Broken foot"), or pass `--body-part` / `--injury-type` directly. The output shows how the description was read, so you can check it.
-- **Missing inputs** get a typical value (the median player), and the output lists what was filled in.
-- **Minutes in the last 12 months, career minutes and the date** only affect the career-ending chance; days out don't use them.
-- **Where the range comes from:** how actual injuries in the same severity tier spread around the model's prediction. On held-out players, about half fall below the predicted median and 10% above the 90th percentile, in every tier.
-- **Fitting:** the first run fits the models on all the data and saves them to `models/` (about a minute; not committed). Later runs are instant. After reloading data, run `python predict.py --refit`. Because it is fitted on all the data rather than the 80% training split, the tier merge can find a different number of tiers than `severity.py` reports.
+For many injuries at once: `python predict.py --csv example_injuries.csv --out predictions.csv` (only `age` and `injury` are required). Missing inputs get the median player's value, and the output lists what was filled in. `predict.py` fits on all the data, so its tier count can differ from the held-out run in `severity.py`.
 
-## Things to know
+## The models
 
-- `injury_date` is a real MySQL `DATE` column, so it comes back as Python dates (use `pd.to_datetime(df.injury_date)` for date math). `return_date` is stored as ISO text.
-- Join `injuries`, `players` and `player_seasons` on `ext_player_id` (the Transfermarkt id), not on names. `player_key` is a normalized name (lowercase, no punctuation) kept for searching.
-- `body_part` is guessed from the injury description by keyword. Check it before relying on it.
-- Transfermarkt's `minutes_played` column in `player_performances.csv` is actually **minutes per goal** (blank when the player didn't score). The loader turns it into real minutes (minutes per goal × goals) and, for seasons with no goals, estimates minutes from appearances: 90 per full game, 73.5 when subbed off, 18.5 when subbed on. On seasons where minutes are known, that estimate is within 3% (median). `minutes_estimated` marks which is which. The 25/26 season was only partly downloaded.
-- Column names in the soccer files were matched flexibly. If a loader fails, the error lists the columns it found so you can adjust the `pick(...)` names.
+```text
+# Severity: days missed (severity.py)
+days_missed ~ severity_tier + position + age + age² + log(1+prior injuries)
+              + reinjury_60d + prior_same_part
+family = Gamma, link = log            # exp(coef) = multiplier on days
+
+# Career-ending: yes/no (career.py)
+career_ending ~ body_region + injury_type + position + age + age² + log(1+prior injuries)
+                + reinjury_60d + prior_same_part + log(1+games, 12m) + no_games_12m
+                + log(1+career games) + year
+family = Binomial, link = logit       # exp(coef) = odds ratio
+```
+
+- **Severity tiers:** each injury gets a rating class (body region x injury type, pooled to at least 300 injuries). Neighbouring classes are merged until adjacent tiers differ significantly (p < 0.05), using training players only.
+- **Career-ending** means the player never made another recorded professional appearance after the injury. Only predictors known on the day of the injury are used, not how long it lasted.
+- **Testing:** 80% of players train, 20% test; all of a player's injuries stay on one side.
+
+## Results
+
+![GLM vs. baseline accuracy on held-out players](figures/model_accuracy.png)
+
+**Severity drivers** (multiplier on expected days): the severity tier dominates (0.27x to 4.19x). Same body part injured before adds 9%, a re-injury within 60 days of returning adds 3%, and position and age matter little.
+
+![Career-ending odds ratios by risk factor](figures/career_risk_factors.png)
+
+**Career-ending drivers** (odds ratios): knee 9.8x and Achilles 9.1x vs. hamstring; surgery 3.2x and tear 3.0x; 1.27x per year of age around 26; defenders 1.44x vs. midfielders; players with more games in the last 12 months are much less likely to have their career end (0.53x per log unit).
+
+Full tables are in [MODEL_SUMMARY.md](MODEL_SUMMARY.md).
+
+## Limitations
+
+- **Soccer only:** results may not carry over to other sports.
+- **Patterns, not causes:** for example, players with more recorded injuries have shorter ones, likely a reporting difference across leagues.
+- **Career-ending is inferred** from appearances, so dropping to amateur football counts as career-ending.
+- **Body part is keyword-matched** from the injury description; 18% are "unknown injury".
+
+## Reproduce
+
+The data is a MySQL database, `sports_injury`, holding injuries, player profiles and playing time from Transfermarkt (via [salimt/football-datasets](https://github.com/salimt/football-datasets)).
+
+```bash
+pip install -r requirements.txt
+mysql -u root -e "CREATE DATABASE sports_injury CHARACTER SET utf8mb4"
+git clone https://github.com/salimt/football-datasets data/football-datasets
+(cd data/football-datasets && git lfs pull)
+python build_db.py data/football-datasets
+
+python severity.py       # held-out comparison and coefficients
+python career.py
+python predict.py --injury "Broken foot" --age 30
+```
+
+The scripts connect to `mysql+pymysql://root@localhost/sports_injury`; set `SPORTS_DB_URL` to use another server. The first `predict.py` run fits and saves the models to `models/` (about a minute); `python predict.py --refit` refits after reloading data.
+
+## Files
+
+| File | What it is |
+|---|---|
+| [MODEL_SUMMARY.md](MODEL_SUMMARY.md) | Full model results and drivers. |
+| [severity_models.ipynb](severity_models.ipynb) | Gamma GLM coefficients and the severity tier mapping. |
+| [career_ending_model.ipynb](career_ending_model.ipynb) | Logistic GLM coefficients. |
+| [severity.py](severity.py) | Severity model: builds the data, the severity tiers, fits the gamma GLM and compares it with the baseline. |
+| [career.py](career.py) | Career-ending model: fits the logistic GLM and compares it with the base rate. |
+| [predict.py](predict.py) | Predictions for injuries you describe, one at a time or from a CSV. |
+| [example_injuries.csv](example_injuries.csv) | Example input for `predict.py --csv`. |
+| [figures/](figures/) | The charts on this page. |
+| [make_figures.py](make_figures.py) | Regenerates the figures. |
+| [build_db.py](build_db.py) | Data loading: loads the downloaded Transfermarkt files into MySQL. |
+| [sportsdb.py](sportsdb.py) | Data loading: reads the database into pandas for the models. |
+| [requirements.txt](requirements.txt) | Python packages. |
