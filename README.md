@@ -57,8 +57,9 @@ Use `--deferment 90` to change the deferment period. Any input you leave out get
 ## Where to go next
 
 1. **[MODEL_SUMMARY.md](MODEL_SUMMARY.md)**: all results on one page (drivers, back-test tables, example quotes, deferment sensitivity).
-2. **[runs/pricing_model.ipynb](runs/pricing_model.ipynb)**: the season back-test that the headline numbers come from.
-3. The three components:
+2. **[MODEL_EQUATIONS.md](MODEL_EQUATIONS.md)**: the three fitted equations with every predictor and coefficient, and how they combine.
+3. **[runs/pricing_model.ipynb](runs/pricing_model.ipynb)**: the season back-test that the headline numbers come from.
+4. The three components:
    - [runs/frequency_model.ipynb](runs/frequency_model.ipynb): how many injuries per season,
    - [runs/severity_models.ipynb](runs/severity_models.ipynb): how long an injury lasts,
    - [runs/career_ending_model.ipynb](runs/career_ending_model.ipynb): whether an injury ends a career.
@@ -102,6 +103,7 @@ The code connects to `mysql+pymysql://root@localhost/sports_injury`. Set `SPORTS
 | Path | What it is |
 |---|---|
 | [MODEL_SUMMARY.md](MODEL_SUMMARY.md) | Full results. |
+| [MODEL_EQUATIONS.md](MODEL_EQUATIONS.md) | The fitted equations and coefficient tables. |
 | **model/** | |
 | [model/frequency.py](model/frequency.py) | Negative binomial GLM: expected injuries per season. |
 | [model/severity.py](model/severity.py) | Tiered gamma GLM: days out per injury. |

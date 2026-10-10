@@ -414,7 +414,8 @@ def tidy_terms(index):
 def coefficients(model):
     """Fitted GLM coefficients (link scale) and p-values, with readable term names."""
     res = model.res
-    out = pd.DataFrame({"coef": res.params, "p_value": res.pvalues})
+    out = pd.DataFrame({"coef": np.asarray(res.params), "p_value": np.asarray(res.pvalues)},
+                       index=model.design.cols)    # names from the design: saved models lose them
     out.index = tidy_terms(out.index).rename("variable")
     return out.round(4)
 
