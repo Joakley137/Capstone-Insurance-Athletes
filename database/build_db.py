@@ -2,7 +2,7 @@
 build_db.py — build the soccer injury MySQL database the models read.
 
     mysql -u root -e "CREATE DATABASE sports_injury CHARACTER SET utf8mb4"
-    python build_db.py data/football-datasets [--db mysql+pymysql://root@localhost/sports_injury]
+    python -m database.build_db data/football-datasets [--db mysql+pymysql://root@localhost/sports_injury]
 
 Drops and recreates the tables, then loads the Transfermarkt CSVs from salimt/football-datasets
 (player_injuries*, player_profiles, player_performances, found anywhere under the folder).
@@ -53,6 +53,7 @@ CREATE TABLE player_seasons (
     season_end    DATE,
     minutes       DOUBLE,
     appearances   INT,
+    league        VARCHAR(10),     -- big-five first division played in (most minutes), else NULL
     PRIMARY KEY (ext_player_id, season_start, season_end)
 );
 
@@ -85,6 +86,10 @@ BODY_PARTS = [
     # last, so a named muscle (hamstring, calf, ...) wins over the generic word
     ("muscle", "Muscle (unspecified)"), ("muscular", "Muscle (unspecified)"),
 ]
+
+
+# Premier League, LaLiga, Serie A, Bundesliga, Ligue 1 (Transfermarkt competition ids)
+BIG_FIVE = ["GB1", "ES1", "IT1", "L1", "FR1"]
 
 
 def body_part(text):
@@ -140,7 +145,9 @@ def player_seasons(path):
     """Its `minutes_played` column is really minutes PER GOAL (blank when the player didn't score), so
     minutes = minutes_played x goals where there are goals. Otherwise minutes are estimated from
     appearances: 90 per full game, 73.5 when subbed off, 18.5 when subbed on. Fitted on the seasons where
-    minutes are known, that estimate has R^2 = 0.996 and a median error of 3%."""
+    minutes are known, that estimate has R^2 = 0.996 and a median error of 3%.
+    league = the big-five first division the player was in that season (most minutes, then most squad
+    listings), NULL if none."""
     raw = pd.read_csv(path, low_memory=False)
     num = lambda c: pd.to_numeric(raw[c], errors="coerce").fillna(0)
     apps, sub_in, sub_out, goals = num("nb_on_pitch"), num("subed_in"), num("subed_out"), num("goals")
@@ -151,7 +158,10 @@ def player_seasons(path):
         "ext_player_id": raw["player_id"].astype(str), "season_start": start, "season_end": end,
         "minutes": exact.where((goals > 0) & exact.notna(), estimate).round(), "appearances": apps,
     })
-    return out.groupby(["ext_player_id", "season_start", "season_end"], as_index=False).sum()
+    keys = ["ext_player_id", "season_start", "season_end"]
+    big = out.assign(league=raw["competition_id"], squad=num("nb_in_group"))[raw["competition_id"].isin(BIG_FIVE)]
+    league = big.sort_values(["minutes", "squad"]).drop_duplicates(keys, keep="last").set_index(keys)["league"]
+    return out.groupby(keys, as_index=False).sum().join(league, on=keys)
 
 
 def main():

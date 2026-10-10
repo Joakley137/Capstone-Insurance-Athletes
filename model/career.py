@@ -1,9 +1,9 @@
 """
 career.py — logistic GLM: does an injury end the player's career?
 
-    python career.py [--sport Soccer]
+    python -m model.career [--sport Soccer]
 
-    import career
+    from model import career
     train, test = career.split(career.build_dataset())
     models = career.fit_all(train)
     career.compare(models, test)
@@ -19,8 +19,8 @@ import pandas as pd
 import statsmodels.api as sm
 from sklearn.metrics import average_precision_score, brier_score_loss, log_loss, roc_auc_score
 
-import severity as sev
-import sportsdb as sdb
+from model import severity as sev
+from database import sportsdb as sdb
 
 FOLLOW_UP_SEASONS = 2
 MIN_EVENTS = 20  # min career-ending events in train for a region/type to keep its own level

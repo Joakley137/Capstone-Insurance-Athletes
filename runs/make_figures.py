@@ -1,7 +1,8 @@
 """
-make_figures.py — README figures from the severity and career-ending GLMs.
+make_figures.py — README figures: severity tiers, career-ending risk factors, model accuracy and the pricing back-test.
 
-    python make_figures.py        # writes figures/severity_tiers.png, career_risk_factors.png, model_accuracy.png
+    python -m runs.make_figures        # writes figures/severity_tiers.png, career_risk_factors.png, model_accuracy.png,
+                                       # pricing_backtest.png
 
 Coefficients come from the fits on training players (80%); accuracy is scored on held-out players (20%).
 """
@@ -14,8 +15,8 @@ import numpy as np
 import pandas as pd
 from matplotlib.ticker import FuncFormatter, NullFormatter
 
-import career
-import severity as sev
+from model import career
+from model import severity as sev
 
 OUT = Path(__file__).parent / "figures"
 GLM, BASE = "#2a78d6", "#a3a29c"                       # model blue, baseline gray
@@ -232,6 +233,61 @@ def accuracy_figure(sev_models, sev_test, car_models, car_test):
     return {"mae": mae, "auc": auc, "top10": top10}
 
 
+# --------------------------------------------------------------------------
+# Pricing back-test (season level, held-out players)
+# --------------------------------------------------------------------------
+def pricing_figure(bt):
+    from runs import backtest
+    cal = backtest.by_group(bt, "p_covered_60", "over_60")
+    lab = bt[bt["career_labelled"]]
+    y = lab["career_ending"].to_numpy()
+    top20 = backtest.capture(lab, "p_career", "career_ending")
+    pct = FuncFormatter(lambda v, _: f"{v:.0%}")
+
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(10.5, 5.2), gridspec_kw={"width_ratios": [1.25, 1]})
+    fig.subplots_adjust(left=0.07, right=0.97, top=0.75, bottom=0.14, wspace=0.3)
+
+    x = cal.index.astype(int).to_numpy()
+    a1.bar(x, cal["actual"], width=0.62, color=BASE, label="Actual share")
+    a1.plot(x, cal["predicted"], "o-", color=GLM, lw=2, ms=7, mec="white", mew=1.5, label="Model prediction")
+    a1.set_xticks(x)
+    a1.set_xlabel("Predicted-risk decile (1 = lowest)")
+    a1.set_ylabel("Player-seasons with an injury > 60 days")
+    a1.yaxis.set_major_formatter(pct)
+    a1.set_ylim(0, cal[["predicted", "actual"]].max().max() * 1.18)
+    a1.legend(frameon=False, loc="upper left", fontsize=10)
+    a1.set_title("Injury beyond a 60-day deferment", pad=10)
+    a1.grid(axis="y", color=GRID, lw=0.8)
+    a1.set_axisbelow(True)
+
+    order = np.argsort(-lab["p_career"].to_numpy())
+    flagged = np.r_[0, np.arange(1, len(y) + 1) / len(y)]
+    captured = np.r_[0, np.cumsum(y[order]) / y.sum()]
+    a2.plot([0, 1], [0, 1], color=BASE, lw=2, ls="--")
+    a2.step(flagged, captured, where="post", color=GLM, lw=2)
+    a2.plot([0.2], [top20], "o", ms=8, color=GLM, mec="white", mew=2)
+    a2.annotate(f"Riskiest 20% of seasons contain\n{int(round(top20 * y.sum()))} of the {int(y.sum())} career endings",
+                (0.2, top20), xytext=(0.33, 0.25), fontsize=10, arrowprops={"arrowstyle": "-", "color": INK_2, "lw": 1})
+    a2.text(0.66, 0.56, "No predictors", color=INK_2, fontsize=9.5)
+    a2.set_xlim(0, 1)
+    a2.set_ylim(0, 1.02)
+    a2.xaxis.set_major_formatter(pct)
+    a2.yaxis.set_major_formatter(pct)
+    a2.set_xlabel("Share of player-seasons flagged, riskiest first")
+    a2.set_ylabel("Share of career endings caught")
+    a2.set_title("Career-ending injury in the season", pad=10)
+    a2.grid(color=GRID, lw=0.8)
+    a2.set_axisbelow(True)
+
+    p60, a60 = bt["p_covered_60"].mean(), bt["over_60"].mean()
+    _title(fig, "Season back-test on held-out players: injuries beyond 60 days are calibrated",
+           f"{len(bt):,} held-out big-five player-seasons. Left: predicted {p60:.1%} vs actual {a60:.1%} with an "
+           f"injury > 60 days. Right: {len(lab):,} seasons with\nknown follow-up; predicted "
+           f"{lab['p_career'].mean():.2%} vs actual {y.mean():.2%} career-ending.")
+    _save(fig, "pricing_backtest.png")
+    return cal.round(3)
+
+
 def main():
     OUT.mkdir(exist_ok=True)
     print("Severity model ...")
@@ -243,6 +299,9 @@ def main():
     c_models = career.fit_all(c_train)
     print(career_figure(c_models["Logistic GLM, main effects"], c_train).round(2).to_string())
     print(accuracy_figure(s_models, s_test, c_models, c_test))
+    print("Pricing back-test ...")
+    from runs import backtest
+    print(pricing_figure(backtest.run()).to_string())
 
 
 if __name__ == "__main__":

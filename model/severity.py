@@ -1,9 +1,9 @@
 """
 severity.py — injury severity (days missed): gamma GLM on severity tiers.
 
-    python severity.py                        # fit, print held-out comparison and coefficients
+    python -m model.severity                        # fit, print held-out comparison and coefficients
 
-    import severity as sev
+    from model import severity as sev
     train, test = sev.split(sev.build_dataset())
     models = sev.fit_all(train)
     sev.compare(models, test)
@@ -20,7 +20,7 @@ from scipy import optimize, stats
 from sklearn.metrics import mean_gamma_deviance
 from sklearn.model_selection import GroupShuffleSplit
 
-import sportsdb as sdb
+from database import sportsdb as sdb
 
 # Injury type from the description; first match wins
 NATURE = [
@@ -266,20 +266,21 @@ class GammaGLM:
 # --------------------------------------------------------------------------
 # Severity tiers
 # --------------------------------------------------------------------------
-def _tier_rhs(ref):
-    return f"C(severity_tier, Treatment('{ref}')) + " + RHS_PLAYER
+def _tier_rhs(ref, extra=""):
+    return f"C(severity_tier, Treatment('{ref}')) + " + RHS_PLAYER + extra
 
 
-def severity_tiers(train, alpha=0.05, max_rounds=10):
+def severity_tiers(train, alpha=0.05, max_rounds=10, extra=""):
     """Merge adjacent rating classes (by relativity) until neighbours differ at alpha; refit each round.
-    Train data only. Returns {rating class: "Tier k"}, Tier 1 = shortest."""
+    Train data only. `extra`: further terms in the GLM (as TieredGammaGLM). Returns {rating class: "Tier k"},
+    Tier 1 = shortest."""
     d = completed(train).copy()
     classes = sorted(d["injury_class"].astype(str).unique())
     group_of = {c: f"G{i}" for i, c in enumerate(classes)}
     for _ in range(max_rounds):
         ref = group_of[REF_CLASS]
         d["severity_tier"] = d["injury_class"].astype(str).map(group_of).astype("category")
-        design, res = _gamma_glm(_tier_rhs(ref), d)
+        design, res = _gamma_glm(_tier_rhs(ref, extra), d)
         cov = res.cov_params()
         col = lambda g: f"C(severity_tier, Treatment('{ref}'))[T.{g}]"
         groups = sorted(set(group_of.values()), key=lambda g: 0.0 if g == ref else res.params[col(g)])
@@ -319,10 +320,11 @@ def severity_tiers(train, alpha=0.05, max_rounds=10):
 
 
 class TieredGammaGLM(GammaGLM):
-    """Gamma GLM on severity tiers (built in fit()) instead of rating classes."""
+    """Gamma GLM on severity tiers (built in fit()) instead of rating classes.
+    extra: further terms appended to the player terms, e.g. " + C(league, Treatment('GB1'))" (pricing.py)."""
 
-    def __init__(self, name="Gamma GLM, severity tiers", alpha=0.05):
-        self.name, self.alpha = name, alpha
+    def __init__(self, name="Gamma GLM, severity tiers", alpha=0.05, extra=""):
+        self.name, self.alpha, self.extra = name, alpha, extra
 
     def _tiers(self, df):
         out = df.copy()
@@ -331,10 +333,10 @@ class TieredGammaGLM(GammaGLM):
         return out
 
     def fit(self, train):
-        self.tier_of = severity_tiers(train, self.alpha)
+        self.tier_of = severity_tiers(train, self.alpha, extra=self.extra)
         self.tier_names = sorted(set(self.tier_of.values()), key=lambda t: int(t.split()[1]))
         self.ref_tier = self.tier_of[REF_CLASS]
-        self.rhs = _tier_rhs(self.ref_tier)
+        self.rhs = _tier_rhs(self.ref_tier, self.extra)
         super().fit(self._tiers(train))
         # Per-tier empirical quantiles of actual / predicted
         d = completed(train)
