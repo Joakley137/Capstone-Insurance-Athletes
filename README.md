@@ -11,10 +11,15 @@ A MySQL database (`sports_injury`) of athlete injuries, contracts and market val
 | [build_db.py](build_db.py) | Creates the database tables and loads each data source you download (NBA, NFL, soccer, MLB, ESPN, any CSV). It doesn't download anything on its own. |
 | [sportsdb.py](sportsdb.py) | Pulls data back out of the database as pandas tables: `sdb.injuries(...)`, `sdb.contracts(...)`, `sdb.players(...)` and so on. |
 | [severity.py](severity.py) | The severity model: how many days an injury keeps a player out. Builds the modeling table, the rating classes and severity tiers, and fits and compares the gamma GLM and alternatives. |
+| [frequency.py](frequency.py) | The injury-frequency model: how often a player gets injured, per day at risk, from age, position, playing time and injury history (Poisson and negative binomial GLMs). Multiply by the severity model for expected days lost. |
+| [premium_test.py](premium_test.py) | Tests what a club's insurance premium could be paying for: wages while players are out (with waiting periods), or the rest of a contract after a career-ending injury. Compares the premium to realized and model-expected losses on each club's squad. |
+| [policy_sim.py](policy_sim.py) | Simulates a club's seasons to compare deductible policies: the club's average and worst-year cost against the insurer's profit. |
+| [club_financials.csv](club_financials.csv) | Gross payroll and total insurance premium per club and season (Lyon, Real Madrid, AC Milan, Dortmund). Input to `premium_test.py` and `policy_sim.py`. |
 | [career.py](career.py) | The career-ending model: the chance an injury ends the player's career (logistic regression), with its comparison models. |
 | [predict.py](predict.py) | Predictions for injuries you describe: expected days out, a likely range and the career-ending chance, for one injury or a whole CSV. |
 | [example_injuries.csv](example_injuries.csv) | Example input for `predict.py --csv`, showing the columns it accepts. |
 | [explore.ipynb](explore.ipynb) | Short notebook that connects to the database and shows a sample of each table. |
+| [frequency_model.ipynb](frequency_model.ipynb) | The frequency model step by step: the player-season table, the simple "earlier injury" comparison, model comparison, calibration and relativities. |
 | [severity_models.ipynb](severity_models.ipynb) | The severity model step by step, with charts: data, rating classes, interaction search, model comparison, relativities, severity tiers and conclusions. |
 | [career_ending_model.ipynb](career_ending_model.ipynb) | The career-ending model step by step: how "career-ending" is defined and checked, model comparison, calibration, odds ratios and conclusions. |
 | [requirements.txt](requirements.txt) | Python packages to install (`pip install -r requirements.txt`). |
@@ -249,7 +254,7 @@ The views are built on top of these tables. `v_injury_summary` totals `injuries`
 
 ## Injury models
 
-Two models price an injury: how long it keeps a player out (**severity**), and whether it ends his career (**career-ending**). **[MODEL_SUMMARY.md](MODEL_SUMMARY.md)** gives the results, the most important predictors and a plain-language explanation for readers new to modeling. Soccer is the only source loaded so far that records how long injuries lasted, so both are fitted on soccer. Each notebook runs the model with plots and explains the results.
+Three models price an injury: how often it happens (**frequency**), how long it keeps a player out (**severity**), and whether it ends his career (**career-ending**). **[MODEL_SUMMARY.md](MODEL_SUMMARY.md)** gives the results, the most important predictors and a plain-language explanation for readers new to modeling. Soccer is the only source loaded so far that records how long injuries lasted, so both are fitted on soccer. Each notebook runs the model with plots and explains the results.
 
 ### Severity: days missed — `severity.py`, `severity_models.ipynb`
 
@@ -301,6 +306,31 @@ career.odds_ratios(models["Logistic GLM, main effects"])
 - **Predictors** are only what is known on the day of the injury; how long the injury lasted is not used.
 - **Result:** the main-effects logistic GLM has an AUC of 0.87, and its riskiest 10% of injuries contain 61% of the career-ending ones. Interactions and gradient boosting did not beat it on held-out data.
 - **Biggest risk factors:** knee or Achilles injuries (about 8× the odds of a hamstring injury), surgery or a tear (about 3×), age, little recent playing time, and playing outside the leagues that have market values.
+
+### Frequency: how often — `frequency.py`, `frequency_model.ipynb`
+
+```bash
+python frequency.py                 # top-5 leagues from 2012: recurrence table and model comparison
+python frequency.py --all-leagues   # every league in the data
+```
+
+- **Table:** one row per player and July-June season, with an injury count and the days at risk. Seasons with no injuries are included. Only players with an appearance in a top-5 league are kept (`competition_id` GB1, ES1, IT1, L1, FR1), and only seasons from 2012: injury records are thin before then (about 2% of players have one in a season up to 2006, 10-15% by 2012).
+- **Models:** Poisson and negative binomial GLMs with days at risk as the offset, plus a gradient-boosting benchmark. Predictors are known on 1 July: earlier injuries, last season's injuries, still injured on 1 July, age, position, market value and minutes.
+- **Result:** the Poisson GLM is well calibrated (1.006 predicted vs 1.018 actual injuries a season) and gradient boosting adds almost nothing. The injury rate rises with earlier injuries (about x1.3 for one, x2.6 for nine), but how long the earlier injuries lasted adds nothing. Goalkeepers have about 28% fewer injuries. The all-leagues table is not used: players Transfermarkt barely tracks make "no injury history" look safer than it is.
+- **With severity:** expected injuries x expected days per injury is the expected days lost. `model.p_injury(df)` gives the chance of at least one injury in a season.
+
+### What do club premiums pay for? — `premium_test.py`, `policy_sim.py`
+
+```bash
+python premium_test.py              # a few minutes: refits the models on all the data
+python policy_sim.py --min-wage 8   # simulated deductible policies (optional --min-wage)
+```
+
+Compares four clubs' insurance premiums (`club_financials.csv`, 49 club-seasons) with the loss their squads would cause, as a share of payroll. A player's wage is his market-value share of the payroll, because the data has no wages. Findings:
+- **Not all time out.** Paying full wages for every injury day would cost 6-13x the premium (48x for Dortmund).
+- **Not career-ending cover alone.** With three years of contract left it is 12-20% of the premium for Milan, Madrid and Lyon (30 career-ending events behind the rate).
+- **Size fits only very long absences:** a waiting period of roughly 180-270 days if the whole squad is insured, which is about a cruciate rupture. The data cannot separate that from a lower deductible with a loading, or from only some players being insured.
+- **Insuring only the best-paid players did not fit better** (wage threshold or top-N players), and the premium does not follow each club's realized injuries from year to year. Differences between clubs (Dortmund pays about a quarter of the others' rate) are not explained by injury risk, so something else sets them: league or country rules, negotiated terms, or what "total insurance premium" includes.
 
 ### Predicting your own injuries — `predict.py`
 

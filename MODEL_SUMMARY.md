@@ -9,6 +9,8 @@ Together they estimate what an injury is likely to cost, which is what an insure
 
 All numbers below come from professional soccer: 163,414 injuries to 34,429 players, from Transfermarkt. Soccer is the only source in the database that records how long each injury lasted.
 
+> **Note on the numbers.** Parts 1 and 2 were produced before a data fix: the soccer loader used to read both injury files in the source repository, which overlap, so most injuries were in the database twice. The loader now keeps one copy of each injury. Re-run `severity_models.ipynb` and `career_ending_model.ipynb` to refresh the figures here, especially those that depend on injury history (`prior_injuries`, re-injury within 60 days, same body part before). Part 3 uses the corrected data.
+
 ---
 
 ## Part 1 — Results
@@ -194,6 +196,29 @@ That is why the 57 injury groups were merged into 11 **severity tiers**:
 | Confidence interval | The range the true value probably falls in. |
 | AUC | How often the model ranks a real case above a non-case; 0.5 is guessing, 1.0 is perfect. |
 | Median | The middle value: half the injuries are shorter, half longer. |
+
+---
+
+## Part 3 — How often injuries happen, and what club premiums pay for
+
+*Results from the corrected data. Code: `frequency.py` and `premium_test.py`.*
+
+### Frequency
+
+- The table has one row per player and season, for players in the top-5 leagues from 2012 on (injury records before that are too thin: about 2% of players with a recorded injury in a season until 2006).
+- A typical top-5 player has about **1 injury a season**. A player with no earlier injuries has about 0.46 a year; with nine or more, about 2.0.
+- After accounting for age, position, value and playing time, the number of **earlier injuries** is the strongest signal: one earlier injury raises the rate by about 33%, three by about 78%, nine by about 2.6x. **How long** earlier injuries lasted, or whether one was a long one, adds nothing.
+- **Goalkeepers** are injured about 28% less often than midfielders. Players still injured on 1 July are about 12% more likely to be injured again. Young players (about 20) have about 20% more injuries than 26-year-olds.
+- The model is well calibrated on players it never saw. It ranks injured seasons above uninjured ones about 73% of the time (AUC 0.73).
+- **Caution:** market value and "no market value" effects partly reflect how closely a player is followed, not how injury-prone he is.
+
+### What the premiums pay for
+
+For Lyon, Real Madrid, AC Milan and Dortmund (49 club-seasons), the premium is 0.2-1.9% of payroll. Expected injury cost is 10-18% of payroll for the same squads.
+- The premium is **too small to pay full wages for time out** (6-13x too small; Dortmund 48x).
+- It is also **too large for career-ending cover alone** (that is only 12-20% of it for three clubs).
+- Its size matches **very long absences**, a waiting period of roughly 6-9 months for the whole squad, which is about a cruciate rupture and longer.
+- The premium follows each club's payroll, not its injuries in a given year, and insuring only the best-paid players did not fit better. With four clubs and no wage or policy data, the policy itself cannot be identified. More clubs (Premier League accounts are public), real wages and policy terms would settle it.
 
 ---
 
