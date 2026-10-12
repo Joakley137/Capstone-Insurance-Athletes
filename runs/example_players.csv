@@ -1,0 +1,6 @@
+player,age,position,league,minutes_last_season,career_minutes,prior_injuries,days_out_last_season,date,deferment
+Example A,27,Defender,Premier League,2500,15000,4,20,2026-10-01,60
+Example B,33,Defender,,,,,,2026-10-01,60
+Example C,22,Attack,Bundesliga,1800,4000,1,0,2026-10-01,60
+Example D,30,Midfield,LaLiga,900,25000,8,120,2026-10-01,90
+Example E,29,,,,,,,,

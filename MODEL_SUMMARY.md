@@ -1,225 +1,214 @@
-# Injury Model Summary
+# Model Results
 
-This project uses past injuries to predict two things about a new one:
+This page covers the probabilistic part of an injury insurance pricing model for professional soccer players. For one player and one season it gives the chance of any injury, of a **covered** injury (longer than the deferment period, 60 days by default) and of a **career-ending** injury.
 
-1. **How long will it keep the player out?** (the *severity* model, in days)
-2. **Will it end the player's career?** (the *career-ending* model, a yes/no probability)
+Data: Transfermarkt injuries, player profiles and playing time ([salimt/football-datasets](https://github.com/salimt/football-datasets)). Every model is tested on players held out of fitting (80/20 split by player).
 
-Together they estimate what an injury is likely to cost, which is what an insurer needs to price a policy on an athlete. Part 1 gives the results. Part 2 explains how the models work, for readers who don't build models themselves.
+## Key findings
 
-All numbers below come from professional soccer: 163,414 injuries to 34,429 players, from Transfermarkt. Soccer is the only source in the database that records how long each injury lasted.
-
-> **Note on the numbers.** Parts 1 and 2 were produced before a data fix: the soccer loader used to read both injury files in the source repository, which overlap, so most injuries were in the database twice. The loader now keeps one copy of each injury. Re-run `severity_models.ipynb` and `career_ending_model.ipynb` to refresh the figures here, especially those that depend on injury history (`prior_injuries`, re-injury within 60 days, same body part before). Part 3 uses the corrected data.
-
----
-
-## Part 1 — Results
-
-### How accurate are the models?
-
-The models were built on 80% of the players and tested on the other 20%, which they had never seen.
-
-**How long an injury lasts**
-- For the test players, the predicted length of an injury was off by **33 days** on average.
-- Giving every injury the same overall-average guess is off by **44 days**, so the model cuts the error by about a quarter.
-- It is right on average: the test injuries lasted 47.5 days on average, and the model predicted 48.2.
-
-**Whether an injury ends a career**
-- Career-ending injuries are rare: about **1 in 240** injuries (0.42%).
-- The model is good at spotting them. The 10% of injuries it rates as riskiest contain **61%** of all the career-ending ones.
-- Shown one career-ending injury and one ordinary one, the model gives the career-ending one the higher risk **87%** of the time.
-
-### What matters most: how long the player is out
-
-Each group of predictors was removed in turn and the model refit without it. The bigger the loss in accuracy, the more that group matters.
-
-| Rank | Predictor | Accuracy lost without it | What it shows |
-|---|---|---|---|
-| 1 | **Injury type and location** | 11.0% | Far more important than everything else. A knee tear is expected to last about **3.8×** as long as a typical hamstring injury; an illness about **0.27×** as long. |
-| 2 | **Injury history** | 1.3% | Hurting the same body part again adds about **8%**. Getting hurt within 60 days of coming back adds about **5%**. |
-| 3 | **Market value** | 0.8% | Tears in expensive players last about **6% longer** for each step up in value (each step is about 2.7× the value), likely because clubs bring stars back cautiously. Bruises and knocks run the other way. |
-| 4 | **Year** | 0.6% | Injuries last about **2% longer** each year overall. Illnesses and hip injuries are the exception: they are getting shorter. |
-| 5 | **Minutes played in the year before** | 0.6% | Players who had been playing a lot usually have slightly shorter injuries. **Achilles** and **lower-leg** injuries are the exception: more recent playing time goes with *longer* layoffs, consistent with overuse injuries. |
-| 6 | **Injured in June or July** | 0.3% | These run about **28% longer**, because the time out includes the summer break. |
-| 7 | Age | 0.1% | A small effect that peaks around age 31. |
-| 8 | Position | ~0% | Almost no effect. |
-
-**Typical length by injury, from the data:**
-
-| Injury | Average days out | Median days out |
-|---|---|---|
-| Achilles tear / rupture | 203 | 190 |
-| Knee tear / rupture (mostly cruciate ligament) | 190 | 191 |
-| Knee surgery | 167 | 150 |
-| Lower-leg fracture | 152 | 130 |
-| Foot fracture | 83 | 74 |
-| Ankle injury (unspecified) | 44 | 25 |
-| Hamstring injury (unspecified) | 43 | 29 |
-| Hamstring strain | 32 | 23 |
-| Concussion | 21 | 11 |
-| Illness | 11 | 8 |
-
-The average is higher than the median because a few injuries run very long. That long tail is exactly what makes injuries expensive to insure.
-
-### Severity tiers: the pricing table
-
-The model starts with 57 injury groups, but many of them turn out to be statistically indistinguishable. Merging those leaves **11 severity tiers**, and the model is just as accurate with 11 as with 57. Each tier is clearly different from the ones next to it.
-
-| Tier | Multiplier vs. Tier 6 | Median days out | Examples |
-|---|---|---|---|
-| 1 | 0.26 | 8 | Illness |
-| 2 | 0.53 | 11 | Bruises and knocks to the knee or foot |
-| 3 | 0.63 | 17 | Muscle strains, concussion, ankle ligament sprains, thigh knocks |
-| 4 | 0.75 | 20 | Hamstring strains, calf and groin injuries |
-| 5 | 0.87 | 21 | Unspecified injuries, muscle tears, calf and groin tears, head fractures |
-| 6 | 1.00 | 28 | Hamstring and ankle injuries (unspecified), hand and arm fractures |
-| 7 | 1.30 | 31 | Ankle tears, back, shoulder and unspecified knee injuries |
-| 8 | 1.57 | 43 | Foot and shoulder fractures, groin surgery, hip injuries |
-| 9 | 2.00 | 62 | Knee ligament injuries, other surgeries and tears |
-| 10 | 2.96 | 141 | Achilles tears, knee and ankle surgery, lower-leg fractures |
-| 11 | 3.61 | 192 | Knee tears (mostly cruciate ligament) |
-
-The full list of which injury goes in which tier is in `severity_models.ipynb`, section 7.
-
-### What matters most: whether the career ends
-
-| Rank | Predictor | Accuracy lost without it | What it shows |
-|---|---|---|---|
-| 1 | **Injury location and type** | 7.5% | Knee and Achilles injuries carry about **8×** the risk of a hamstring injury. Surgery or a tear on top of that roughly **triples** the risk. |
-| 2 | **Age** | 4.3% | Risk rises about **24% per year** around age 26, and keeps climbing more slowly after that. |
-| 3 | **Market value** | 2.2% | Players with no market value (usually lower leagues) have about **4×** the risk. Dropping out of professional football is easier at that level. |
-| 4 | **Minutes played in the year before** | 1.9% | Players who had been playing regularly are much less likely to see their career end. |
-| 5 | Injury history, position, year | <0.1% each | Little effect once everything above is known. One exception: defenders run about 1.4× the risk of midfielders. |
-
-The two accuracy columns aren't directly comparable: each model is measured in its own way. Within one table, bigger means more important.
-
-### Recommendations
-
-- **Expected cost of an injury:** use the **gamma GLM with severity tiers** for days missed. Its multipliers can be used directly as a pricing table.
-- **The chance of a very long absence**, e.g. for policy limits: use the **lognormal** model with the same predictors. It describes the long tail more accurately.
-- **Career-ending risk:** use the **logistic regression**. More complex versions did not do better.
-- **Putting them together:**
-  - **Formula:** expected cost ≈ chance the career ends × remaining contract + chance it doesn't × expected days out × daily salary.
-  - **Example:** a 1% career-ending risk on a $50M remaining contract adds about $500,000 on its own.
-
-### Getting a prediction for a new injury
-
-`predict.py` takes an injury you describe and returns three things:
-- the expected days out
-- a realistic range: "half of similar injuries take under X days, 9 in 10 under Y"
-- the chance it ends the career
-
-For example, for a 27-year-old regular-starting defender worth €15M with a torn cruciate ligament:
-- **Expected time out:** 188 days
-- **Range:** half of similar injuries take under 188 days, and 9 in 10 under 319
-- **Chance the injury ends his career:** about 0.5%
-
-The same injury to a 33-year-old with typical playing time and market value comes out at 202 days and about a **5.5%** chance of ending his career. See the README for how to run it.
-
-### Limitations
-
-- **Soccer only.** The other sports in the database don't yet record how long injuries lasted, so the numbers may not carry over to the NFL or NBA.
-- **Patterns, not causes.** For example, players with many recorded injuries tend to have *shorter* ones. That's probably because top clubs report minor knocks that lower leagues never record, not because getting injured makes players heal faster.
-- **"Career-ending" is inferred.** It means the player never made another recorded professional appearance. A player who moved down to amateur football counts as career-ending, which is what an insurer of a professional career cares about.
-- **Body part comes from the injury description.** It is matched by keywords, and 18% of injuries are recorded only as "unknown injury".
+- **The season probabilities are calibrated.** On 6,086 held-out big-five player-seasons the model predicts 54.2% with an injury (actual 52.8%) and 11.9% with an injury over 60 days (actual 12.1%).
+- **The model separates low-risk from high-risk players.** Ranked by predicted risk, the lowest tenth has a 3.8% actual chance of a covered injury and the highest tenth 19.9%. Every tenth is within about 3 points of its prediction.
+- **Injury history drives frequency.** Each log unit of prior injuries multiplies expected injuries by 1.53. Goalkeepers have 0.63 times the rate of midfielders.
+- **The deferment matters a lot.** For a typical player, the chance of a covered injury falls from 23% with a 30-day deferment to 11% at 60 days, 6% at 90 days and 2% at 180 days.
+- **Career-ending injuries are rare:** about 0.2% of player-seasons. Knee and Achilles injuries, surgery, age and little recent playing time raise the risk most.
+- **Fit on the insured population.** When severity was first fit on injuries in all leagues, covered injuries were over-predicted 1.44 times. Big-five injuries are recorded as shorter on average, because minor knocks are recorded more completely there. The probabilities are calibrated only once each piece is fit on the population being priced.
 
 ---
 
-## Part 2 — How the models work, in plain terms
+## The pricing formula
 
-### What is a model here?
+```text
+λ = expected injuries this season            negative binomial GLM, dispersion α
+q = P(an injury lasts more than D days)      tiered gamma GLM, averaged over the injury mix
+c = P(an injury ends the career)             logistic GLM, averaged over the injury mix
 
-A model is a formula that turns facts about an injury into a prediction. Facts like what was injured, how old the player is and how much he had been playing go in; a predicted number of days comes out. The formula learns its numbers from tens of thousands of past injuries where we already know the answer.
+P(at least one injury)          = 1 − (1 + αλ)^(−1/α)
+P(at least one covered injury)  = 1 − (1 + αλq)^(−1/α)
+P(career-ending injury)         = 1 − (1 + αλc)^(−1/α)
+```
 
-### Training and testing
+- The type of a future injury is unknown. So q and c are weighted averages over body region and injury type cells, using each cell's share of insured injuries as the weight.
+- If each injury independently has probability q of being covered, covered injuries are again negative binomial with mean λq and the same α ("thinning"). This assumes an injury's type and length don't depend on how many injuries the player has.
+- Inputs: age, position, league, minutes last season, career minutes, prior injuries, days out last season and the date. Missing inputs take typical values.
+- Code: `model/pricing.py` (`quote`, `combine`). Back-test: `runs/pricing_model.ipynb`.
 
-If you test a student on the exact questions they studied, you learn little about what they understand. So the players were split:
-- **Training (80%):** the model learns from these.
-- **Testing (20%):** the model is graded on these players, whom it never saw.
+---
 
-Every accuracy number in this summary comes from the test players. All of a player's injuries go on the same side of the split, so the model can't recognize someone it already studied.
+## Season back-test
 
-### The severity model: a gamma GLM
+All models are fit on training players only. The held-out set is 6,086 big-five player-seasons of 1,956 players. Each season is described by what was known at its start.
 
-Most injuries are short, but a few last a year or more. An ordinary average-based formula handles that lopsided pattern poorly. A **gamma GLM** (generalized linear model) is the standard insurance tool for amounts like this, which can never be negative and occasionally run very large.
+![Season back-test](runs/figures/pricing_backtest.png)
 
-Its output is easy to read because every factor works as a **multiplier**:
-- Start from a baseline: an unspecified hamstring injury to a typical 26-year-old midfielder.
-- A knee tear multiplies the expected days by 3.8.
-- Being injured in June or July multiplies them by 1.28.
-- The multipliers combine: a knee tear in June gives 3.8 × 1.28 ≈ 4.9 times the baseline.
+| Season probability | Predicted | Actual | Ratio |
+|---|---|---|---|
+| At least one injury | 0.542 | 0.528 | 1.03 |
+| At least one injury > 30 days | 0.243 | 0.253 | 0.96 |
+| At least one injury > 60 days | 0.119 | 0.121 | 0.98 |
+| At least one injury > 90 days | 0.070 | 0.073 | 0.97 |
+| At least one injury > 180 days | 0.024 | 0.028 | 0.86 |
+| Career-ending injury (4,814 seasons with known follow-up, 7 events) | 0.0021 | 0.0015 | 1.44 |
 
-A multiplier above 1 means longer injuries; below 1 means shorter.
+**Covered injury (> 60 days) by predicted-risk decile:**
 
-### The career-ending model: logistic regression
+| Decile | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Predicted | 4.2% | 6.3% | 7.5% | 8.7% | 10.3% | 12.1% | 13.9% | 15.8% | 18.1% | 22.5% |
+| Actual | 3.8% | 5.6% | 9.4% | 11.2% | 13.0% | 13.0% | 12.8% | 15.3% | 17.4% | 19.9% |
 
-This model predicts a **probability** between 0% and 100%. Its factors also work as multipliers, but on the **odds** of a career-ending injury rather than on days. Because these probabilities are small, multiplying the odds by 3 is very close to multiplying the risk by 3. So "a knee injury carries 8× the risk" can be read just as it sounds.
+**Any injury by decile:** predicted 21% to 86%, actual 14% to 86%, every decile within about 7 points.
 
-### Grouping rare injuries ("rating classes")
+**Career-ending:** only 7 events, so read this as indicative. The riskiest 20% of player-seasons contain 4 of the 7. The career model is fit on all leagues and over-predicts slightly in the big five.
 
-Each injury is placed in a group by **where** it is (knee, ankle…) and **what kind** it is (tear, fracture, bruise…). A knee *tear* and a knee *bruise* are very different, so they get separate groups.
+**By league (> 60 days, predicted vs actual):** Premier League 14.4% vs 17.1%, LaLiga 10.4% vs 10.2%, Serie A 11.6% vs 10.5%, Bundesliga 14.6% vs 15.5%, Ligue 1 9.0% vs 7.8%.
 
-Some combinations are rare: there might be only 40 elbow fractures. Averages from so few cases are unreliable, so rare combinations are pooled with similar ones, e.g. "fractures at other sites". Every group has at least 300 injuries behind it. Insurers do the same: they don't set a price from a handful of claims.
+---
 
-### Interactions
+## Example quotes (60-day deferment)
 
-Normally each factor has one effect everywhere. An **interaction** lets a factor's effect depend on something else. For example, heavy recent playing time makes *Achilles* injuries last longer, even though it makes most injuries slightly shorter.
+From `python -m model.pricing`. All models are fit on all data.
 
-We tested 12 possible interactions and kept the 3 that improved accuracy on held-out data. The other 9 were left out, because adding effects that don't really exist makes a model worse on new players.
+| Player | Expected injuries λ | P(any injury) | P(covered injury) | P(career-ending) |
+|---|---|---|---|---|
+| 27-year-old Premier League defender, 2,500 min last season, 15,000 career min, 4 prior injuries | 1.00 | 59% | 15.6% | 0.25% |
+| 33-year-old defender, 2,200 min, 45,000 career min, 10 prior injuries (league defaults to Serie A) | 1.44 | 71% | 13.3% | 0.88% |
+| 22-year-old Bundesliga attacker, 1,500 min, 5,000 career min, 1 prior injury | 0.87 | 55% | 10.0% | 0.08% |
 
-### Why several models were compared
+The 33-year-old has more injuries but a lower covered-injury chance than the 27-year-old. This is mostly a league effect: Serie A records more and shorter injuries than the Premier League. A covered injury lasts 122 to 137 days on average for these players.
 
-To check that the main models are good enough, they were compared against alternatives:
-- **Different shapes for the spread of injury lengths:** lognormal, inverse Gaussian and Weibull.
-- **Gradient boosting:** a flexible machine-learning method that finds patterns automatically but can't produce a simple pricing table.
+## Deferment sensitivity
 
-The gamma GLM came within about 2% of gradient boosting's accuracy while staying easy to explain. The lognormal captured the long injuries best.
+A typical held-out player-season: 25-year-old Serie A defender, 1,898 minutes last season, 2 prior injuries (λ = 1.04, P(any injury) = 61%, P(career-ending) = 0.21%). Models fit on training players.
 
-### How sure are we?
+| Deferment | P(an injury lasts longer) | P(covered injury this season) | Average length of a covered injury |
+|---|---|---|---|
+| 30 days | 26.4% | 23.5% | 77 days |
+| 60 days | 11.2% | 10.9% | 125 days |
+| 90 days | 6.2% | 6.2% | 167 days |
+| 180 days | 1.9% | 1.9% | 264 days |
 
-Each multiplier comes with a **95% confidence interval**: a range that likely contains the true value. For common injuries the range is narrow; knee tears are 3.3× to 4.4×. For rarer groups it is wider. When two groups' ranges overlap heavily, the data can't really tell them apart.
+---
 
-That is why the 57 injury groups were merged into 11 **severity tiers**:
-- **How:** groups next to each other in the ranking were combined whenever the difference between them could be due to chance (statistical significance at the 5% level).
-- **When it stopped:** merging continued until every tier was clearly different from its neighbours.
-- **No peeking:** the tiers were decided using only the training players, so the test results stay a fair check.
+## Frequency: expected injuries per season
 
-### Glossary
+**Model:** negative binomial (NB2) GLM, log link. The population is every player in a big-five first-division squad (Premier League, LaLiga, Serie A, Bundesliga, Ligue 1), seasons 2015/16 to 2024/25: 30,240 player-seasons, 9,887 players, 1.03 injuries per season on average (variance 1.74, so overdispersed; α ≈ 0.22). Smaller leagues barely record injuries, so they are left out. All predictors are known at the season start.
 
-| Term | Meaning |
+```text
+log E[injuries] = league + position + age + age² + log(1 + full games last season) + no games last season
+                  + log(1 + prior injuries) + log(1 + days out last season)
+```
+
+**Held-out players:**
+
+| | No predictors | Poisson GLM | Negative binomial GLM | Actual |
+|---|---|---|---|---|
+| Log-likelihood per season | −1.399 | −1.281 | **−1.267** | |
+| Mean absolute error | 0.980 | 0.854 | **0.854** | |
+| Share of seasons with no injury | 0.468 | 0.426 | **0.458** | 0.472 |
+
+By decile, expected injuries run from 0.25 (actual 0.19) to 2.53 (actual 2.33).
+
+**Rate ratios** (multiplier on expected injuries; baseline: 26-year-old Premier League midfielder):
+
+| Predictor | Rate ratio |
 |---|---|
-| Predictor | A fact used to make the prediction (age, body part, minutes played…). |
-| Multiplier / relativity | How much a factor scales the prediction relative to the baseline; 2.0 means twice as long. |
-| Odds ratio | The same idea for a yes/no outcome; at small risks, about how many times riskier. |
-| Training / test set | Data the model learns from / data it is graded on. |
-| Interaction | When one factor's effect depends on another. |
-| Confidence interval | The range the true value probably falls in. |
-| AUC | How often the model ranks a real case above a non-case; 0.5 is guessing, 1.0 is perfect. |
-| Median | The middle value: half the injuries are shorter, half longer. |
+| **log(1 + prior injuries)** | **1.53** per unit |
+| log(1 + full games last season) | 1.23 per unit |
+| log(1 + days out last season) | 1.08 per unit |
+| Goalkeeper / defender / attacker (vs midfielder) | 0.63 / 1.05 / 1.09 |
+| LaLiga / Serie A / Bundesliga / Ligue 1 (vs Premier League) | 0.98 / 1.34 / 1.36 / 0.89 |
+| Age | small; peaks in the mid-20s |
+
+League rate ratios partly reflect how completely each league records injuries.
 
 ---
 
-## Part 3 — How often injuries happen, and what club premiums pay for
+## Severity: how long an injury lasts
 
-*Results from the corrected data. Code: `frequency.py` and `premium_test.py`.*
+**Model:** gamma GLM, log link, on severity tiers. Each injury gets a rating class (body region × injury type). Neighbouring classes are merged into tiers until adjacent tiers differ significantly (p < 0.05).
 
-### Frequency
+```text
+log E[days missed] = severity tier + position + age + age² + log(1 + prior injuries)
+                     + re-injury within 60 days + prior injury to the same body part
+```
 
-- The table has one row per player and season, for players in the top-5 leagues from 2012 on (injury records before that are too thin: about 2% of players with a recorded injury in a season until 2006).
-- A typical top-5 player has about **1 injury a season**. A player with no earlier injuries has about 0.46 a year; with nine or more, about 2.0.
-- After accounting for age, position, value and playing time, the number of **earlier injuries** is the strongest signal: one earlier injury raises the rate by about 33%, three by about 78%, nine by about 2.6x. **How long** earlier injuries lasted, or whether one was a long one, adds nothing.
-- **Goalkeepers** are injured about 28% less often than midfielders. Players still injured on 1 July are about 12% more likely to be injured again. Young players (about 20) have about 20% more injuries than 26-year-olds.
-- The model is well calibrated on players it never saw. It ranks injured seasons above uninjured ones about 73% of the time (AUC 0.73).
-- **Caution:** market value and "no market value" effects partly reflect how closely a player is followed, not how injury-prone he is.
+**All-league model** (`runs/severity_models.ipynb`, 163,414 injuries to 34,429 players). On held-out players the mean absolute error is 33.3 days, against 44.0 with no predictors. The injury dominates. The same body part injured before adds 9%, a re-injury within 60 days adds 3%, and position and age matter little.
 
-### What the premiums pay for
+![Severity tiers](runs/figures/severity_tiers.png)
 
-For Lyon, Real Madrid, AC Milan and Dortmund (49 club-seasons), the premium is 0.2-1.9% of payroll. Expected injury cost is 10-18% of payroll for the same squads.
+The tier table is fit on training players and has 16 tiers. The all-data fit in the notebook has 17 tiers, because it separates knee tears from Achilles tears.
+
+| Tier | Multiplier vs Tier 8 | Median days | Examples |
+|---|---|---|---|
+| 1 | 0.27 | 8 | Illness |
+| 2 | 0.48 | 11 | Concussion, knocks |
+| 3 | 0.55 | 11 | Foot and other knocks |
+| 4 | 0.63 | 17 | Ankle ligament, muscle strains, thigh |
+| 5 | 0.75 | 22 | Calf and hamstring strains |
+| 6 | 0.84 | 21 | Groin, muscle tears |
+| 7 | 0.91 | 21 | Arm/hand, back/neck |
+| 8 | 1.00 | 28 | Hamstring/ankle (unspecified), calf tear |
+| 9 | 1.07 | 29 | Arm/hand fracture, foot |
+| 10 | 1.29 | 33 | Shoulder, hip, ankle tear |
+| 11 | 1.47 | 34 | Knee (unspecified), shoulder fracture |
+| 12 | 1.82 | 62 | Foot fracture, groin surgery |
+| 13 | 2.38 | 63 | Knee ligament |
+| 14 | 2.79 | 99 | Ankle surgery, other fractures and surgeries |
+| 15 | 3.53 | 138 | Knee surgery, lower-leg fracture |
+| 16 | 4.19 | 192 | Knee and Achilles tears |
+
+**Pricing version.** For q, the same model is refit on the insured injuries only: those starting in a big-five season from 2015/16. It adds a league term, because leagues record injury length differently. Expected days relative to the Premier League are LaLiga 0.84×, Serie A 0.69×, Bundesliga 0.74× and Ligue 1 0.88×. Only 13% of these injuries last over 60 days, against 21% in all leagues. The per-injury mode of `model.predict` uses this version, which has fewer tiers.
+
+---
+
+## Career-ending: chance an injury ends the career
+
+**Model:** logistic GLM. "Career-ending" means no professional appearance in any later season and no return within the injury's season, with at least two seasons of follow-up. It is fit on all leagues: 120,682 injuries, 504 career-ending (0.42%). The big-five seasons have only about 25 career-ending injuries. Only information known on the injury date is used.
+
+```text
+logit P(career-ending) = body region + injury type + position + age + age² + log(1 + prior injuries)
+                         + re-injury within 60 days + prior injury to the same body part
+                         + log(1 + games, last 12 months) + no games, last 12 months
+                         + log(1 + career games) + year
+```
+
+**Held-out players:** AUC 0.857 (0.50 with no predictors). The riskiest 10% of injuries contain 55% of the career endings.
+
+![Career-ending risk factors](runs/figures/career_risk_factors.png)
+
+**Odds ratios** (all-data fit, `runs/career_ending_model.ipynb`; the figure shows the training-player fit):
+
+| Predictor | Odds ratio |
+|---|---|
+| **Knee / Achilles** (vs hamstring) | **10.9 / 10.9** |
+| **Surgery / tear / fracture** (vs unspecified) | **3.3 / 2.9 / 2.4** |
+| **Age** | 1.29 per year around 26 |
+| Defender / attacker (vs midfielder) | 1.34 / 0.75 |
+| log(1 + games, last 12 months) | 0.55 per unit: regular players are far less likely to retire |
+| log(1 + career games) | 0.78 per unit |
+| log(1 + prior injuries) | 0.74 per unit |
+| Year | 1.07 per year (likely data coverage) |
+
+---
+
+## What do club premiums pay for?
+
+*Code: `runs/club_premiums.py` and `runs/club_policy_sim.py`. These were first run with an earlier version of the models, so re-run them to refresh the numbers.*
+
+For Lyon, Real Madrid, AC Milan and Dortmund (49 club-seasons in `runs/club_financials.csv`), the premium is 0.2-1.9% of payroll, while the expected injury cost of the same squads is 10-18% of payroll (a player's wage taken as his market-value share of payroll).
 - The premium is **too small to pay full wages for time out** (6-13x too small; Dortmund 48x).
-- It is also **too large for career-ending cover alone** (that is only 12-20% of it for three clubs).
-- Its size matches **very long absences**, a waiting period of roughly 6-9 months for the whole squad, which is about a cruciate rupture and longer.
-- The premium follows each club's payroll, not its injuries in a given year, and insuring only the best-paid players did not fit better. With four clubs and no wage or policy data, the policy itself cannot be identified. More clubs (Premier League accounts are public), real wages and policy terms would settle it.
+- It is **too large for career-ending cover alone** (that is only 12-20% of it for three clubs; about 30 career-ending events behind the rate).
+- Its size matches **very long absences**: a waiting period of roughly 6-9 months for the whole squad, about a cruciate rupture or longer. One premium cannot separate this from a shorter waiting period with an insurer loading, or from only some players being insured.
+- Insuring only the best-paid players (a wage threshold, or the N best-paid) did not fit better, and the premium follows each club's payroll, not its injuries in a given year. Differences between clubs are not explained by injury risk. More clubs, real wages and policy terms would settle what the premium covers.
 
 ---
 
-*Details, code and charts: `severity_models.ipynb` and `career_ending_model.ipynb`. Model code: `severity.py` and `career.py`.*
+## Limitations
+
+- **Big five only.** Frequency and severity are fit on big-five first-division seasons, where recording is dense. The model should not be applied to other leagues as is.
+- **Recording practice.** League effects mix real risk with how each league records injuries. Injuries Transfermarkt misses (minor knocks especially) are missing here too, and prior-injury counts are undercounted for older players.
+- **Independence.** The thinning formula assumes injury count, type and length are independent. Frequently injured players actually have somewhat shorter injuries. The league term removes part of this, and the rest is small at season level.
+- **Career-ending is inferred** from appearances, so dropping to amateur football counts. The career model comes from all leagues, and the big-five back-test rests on 7 events.
+- **Part seasons.** A player who joins or leaves the big five mid-season counts as one full season.
+- **Patterns, not causes.** The coefficients describe associations in the data.
+- **Probabilities only.** A simple expected cost would be P(career-ending) × sum insured + expected covered injuries × average days beyond the deferment × daily benefit.

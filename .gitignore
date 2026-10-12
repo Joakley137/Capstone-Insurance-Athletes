@@ -12,4 +12,4 @@ data/
 .DS_Store
 
 # Fitted models saved by predict.py (rebuilt from the local database)
-models/
+model/fitted/
