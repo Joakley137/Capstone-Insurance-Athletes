@@ -13,6 +13,20 @@ Data: Transfermarkt injuries, player profiles and playing time ([salimt/football
 - **Career-ending injuries are rare:** about 0.2% of player-seasons. Knee and Achilles injuries, surgery, age and little recent playing time raise the risk most.
 - **Fit on the insured population.** When severity was first fit on injuries in all leagues, covered injuries were over-predicted 1.44 times. Big-five injuries are recorded as shorter on average, because minor knocks are recorded more completely there. The probabilities are calibrated only once each piece is fit on the population being priced.
 
+## Training vs test MSE
+
+Each model is fit on training players and scored on both sets (same 80/20 player split as everywhere else). For the career model the MSE is the Brier score.
+
+| Model | Outcome | Train / test rows | Train MSE | **Test MSE** | Test ÷ train | Test MSE, no predictors |
+|---|---|---|---|---|---|---|
+| Frequency: negative binomial GLM | injuries per season | 24,154 / 6,086 | 1.303 | **1.327** | 1.02 | 1.723 |
+| Severity: gamma GLM, severity tiers | days missed per injury | 129,148 / 32,792 | 3,576 | **3,519** | 0.98 | 5,037 |
+| Career-ending: logistic GLM | career-ending (0/1) | 96,833 / 23,849 | 0.00395 | **0.00447** | 1.13 | 0.00455 |
+
+- **No sign of overfitting.** Test error is within a few percent of training error for frequency and severity. Severity's test MSE is slightly lower than its training MSE, which is just which players landed in each set.
+- **The career gap comes from the split, not the model.** The no-predictor base rate shows the same rise from training to test (0.00406 to 0.00455, 1.12×), because the test players happen to have more career-ending injuries. Brier scores this small mostly reflect how rare the event is, so AUC (0.857) is the more useful measure for this model.
+- **Predictors cut test MSE** by 23% for frequency and 30% for severity compared with no predictors. Severity's test RMSE is about 59 days.
+
 ---
 
 ## The pricing formula
